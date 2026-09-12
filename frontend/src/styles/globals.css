@@ -1,0 +1,327 @@
+@import 'tailwindcss';
+
+/* Landscape phones: very little vertical room — shrink fixed chrome. Usage: short:static */
+@custom-variant short (@media (max-height: 520px) and (max-width: 1023px));
+
+/* ───────────────────────── Design tokens ─────────────────────────
+   Night-match under floodlights: ink greens, neon "volt" turf-line lime,
+   electric cyan, flare magenta (SOS), sun amber (weather/holds), grape (legendary).
+
+   THEMING — the values in @theme are the DARK palette. `[data-theme="light"]` (below) re-declares
+   the same custom properties, so every Tailwind utility flips automatically. Rules of thumb:
+   · ink-950 → 400 run "outermost → closest to fg". In light, ink-950 is white (text on accents).
+   · `white/…` overlays (bg-white/5, ring-white/10) are *contrast* overlays: dark ink in light mode.
+   · Need a colour that never flips? `snow` (#fff) and `night` (#05080a).
+   · Any subtree can pin a theme with data-theme="dark" / "light" (e.g. immersive media panels). */
+@theme {
+  --font-display: 'Unbounded Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+
+  --color-ink-950: #030605;
+  --color-ink-900: #05080a;
+  --color-ink-850: #080d0c;
+  --color-ink-800: #0b1210;
+  --color-ink-700: #111a17;
+  --color-ink-600: #18231f;
+  --color-ink-500: #22302a;
+  --color-ink-400: #33443d;
+
+  --color-fg: #eaf2ee;
+  --color-muted: #8a9a94;
+  --color-subtle: #5c6b65;
+
+  --color-volt: #c8ff2e;
+  --color-volt-soft: #e3ff94;
+  --color-volt-deep: #8fbf00;
+  --color-mint: #2ee59d;
+  --color-electric: #3dd9ff;
+  --color-flare: #ff3d7f;
+  --color-sun: #ffb020;
+  --color-grape: #8b5cff;
+  --color-grape-soft: #b69cff;
+
+  --color-snow: #ffffff;
+  --color-night: #05080a;
+
+  --radius-xl2: 1.25rem;
+  --radius-xl3: 1.75rem;
+
+  /* shadows live in the theme blocks + @utility below (Tailwind would inline @theme shadows) */
+
+  --ease-snap: cubic-bezier(0.2, 0.9, 0.1, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --animate-pulse-ring: pulse-ring 2.2s var(--ease-out-expo) infinite;
+  --animate-shimmer: shimmer 2.2s linear infinite;
+  --animate-float: float 6s ease-in-out infinite;
+  --animate-sweep: sweep 3.2s linear infinite;
+  --animate-marquee: marquee 40s linear infinite;
+  --animate-blink: blink 1.4s ease-in-out infinite;
+
+  @keyframes pulse-ring {
+    0% { transform: scale(0.6); opacity: 0.9; }
+    100% { transform: scale(2.4); opacity: 0; }
+  }
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+  }
+  @keyframes sweep {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes marquee {
+    to { transform: translateX(-50%); }
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+}
+
+/* ───────────────────────── Themes ─────────────────────────
+   Dark values are repeated under [data-theme="dark"] so a dark "island" can live inside light mode. */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+  --color-ink-950: #030605;
+  --color-ink-900: #05080a;
+  --color-ink-850: #080d0c;
+  --color-ink-800: #0b1210;
+  --color-ink-700: #111a17;
+  --color-ink-600: #18231f;
+  --color-ink-500: #22302a;
+  --color-ink-400: #33443d;
+  --color-fg: #eaf2ee;
+  --color-muted: #8a9a94;
+  --color-subtle: #5c6b65;
+  --color-volt: #c8ff2e;
+  --color-volt-soft: #e3ff94;
+  --color-volt-deep: #8fbf00;
+  --color-mint: #2ee59d;
+  --color-electric: #3dd9ff;
+  --color-flare: #ff3d7f;
+  --color-sun: #ffb020;
+  --color-grape: #8b5cff;
+  --color-grape-soft: #b69cff;
+  --color-white: #ffffff;
+
+  --shadow-glow-volt: 0 0 0 1px rgb(200 255 46 / 0.35), 0 8px 40px -8px rgb(200 255 46 / 0.45);
+  --shadow-glow-flare: 0 0 0 1px rgb(255 61 127 / 0.4), 0 8px 40px -8px rgb(255 61 127 / 0.5);
+  --shadow-card: 0 1px 0 0 rgb(255 255 255 / 0.04) inset, 0 20px 50px -20px rgb(0 0 0 / 0.8);
+
+  --glass-from: rgb(255 255 255 / 0.055);
+  --glass-to: rgb(255 255 255 / 0.02);
+  --glass-border: rgb(255 255 255 / 0.08);
+  --glass-strong-from: rgb(17 26 23 / 0.92);
+  --glass-strong-to: rgb(8 13 12 / 0.92);
+  --glass-strong-border: rgb(255 255 255 / 0.09);
+  --grad-volt: linear-gradient(100deg, #f4ffd6 0%, #c8ff2e 40%, #2ee59d 100%);
+  --grad-flare: linear-gradient(100deg, #ffd0e0 0%, #ff3d7f 50%, #8b5cff 100%);
+  --grid-line: rgb(200 255 46 / 0.05);
+  --skeleton-a: rgb(255 255 255 / 0.04);
+  --skeleton-b: rgb(255 255 255 / 0.1);
+  --noise-opacity: 0.05;
+  --noise-blend: overlay;
+  --selection: rgb(200 255 46 / 0.35);
+  --glow-strength: 1;
+  --map-filter: invert(1) hue-rotate(180deg) brightness(0.82) contrast(0.95) saturate(0.45); /* = the shipped Discover night filter */
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+  --color-ink-950: #ffffff;
+  --color-ink-900: #f2f5ef;
+  --color-ink-850: #f7f9f5;
+  --color-ink-800: #ffffff;
+  --color-ink-700: #f5f8f3;
+  --color-ink-600: #e9eee6;
+  --color-ink-500: #d3dbcf;
+  --color-ink-400: #b2bdad;
+  --color-fg: #0e1a14;
+  --color-muted: #52625a;
+  --color-subtle: #7a8981;
+  --color-volt: #3f7d00;
+  --color-volt-soft: #4c9200;
+  --color-volt-deep: #2d5a00;
+  --color-mint: #047857;
+  --color-electric: #0e7490;
+  --color-flare: #d61f5e;
+  --color-sun: #b45309;
+  --color-grape: #6d28d9;
+  --color-grape-soft: #6d28d9;
+  --color-white: #0e2a1a; /* contrast overlays: bg-white/5 → faint ink tint */
+
+  --shadow-glow-volt: 0 0 0 1px rgb(63 125 0 / 0.35), 0 8px 28px -10px rgb(63 125 0 / 0.45);
+  --shadow-glow-flare: 0 0 0 1px rgb(214 31 94 / 0.35), 0 8px 28px -10px rgb(214 31 94 / 0.45);
+  --shadow-card: 0 1px 2px rgb(14 42 26 / 0.06), 0 14px 36px -18px rgb(14 42 26 / 0.22);
+
+  --glass-from: rgb(255 255 255 / 0.92);
+  --glass-to: rgb(255 255 255 / 0.74);
+  --glass-border: rgb(14 42 26 / 0.09);
+  --glass-strong-from: rgb(255 255 255 / 0.97);
+  --glass-strong-to: rgb(247 249 245 / 0.97);
+  --glass-strong-border: rgb(14 42 26 / 0.1);
+  --grad-volt: linear-gradient(100deg, #1f4d00 0%, #3f7d00 45%, #047857 100%);
+  --grad-flare: linear-gradient(100deg, #9d174d 0%, #d61f5e 50%, #6d28d9 100%);
+  --grid-line: rgb(63 125 0 / 0.08);
+  --skeleton-a: rgb(14 42 26 / 0.05);
+  --skeleton-b: rgb(14 42 26 / 0.1);
+  --noise-opacity: 0.03;
+  --noise-blend: multiply;
+  --selection: rgb(63 125 0 / 0.22);
+  --glow-strength: 0.45;
+  --map-filter: saturate(0.6) brightness(1.03) contrast(0.97); /* calm 'paper' OSM so price pins + brand greens pop */
+}
+
+/* ───────────────────────── Base ───────────────────────── */
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+  body {
+    @apply bg-ink-900 text-fg font-sans antialiased;
+    font-feature-settings: 'ss01', 'cv11';
+    -webkit-tap-highlight-color: transparent;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+  [data-theme] {
+    color: var(--color-fg);
+  }
+  ::selection {
+    background: var(--selection);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-volt);
+    outline-offset: 2px;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-ink-500) transparent;
+  }
+  h1, h2, h3 {
+    @apply font-display tracking-tight;
+  }
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+  }
+}
+
+/* ───────────────────────── Utilities ───────────────────────── */
+@utility shadow-card {
+  box-shadow: var(--shadow-card);
+}
+
+@utility shadow-glow-volt {
+  box-shadow: var(--shadow-glow-volt);
+}
+
+@utility shadow-glow-flare {
+  box-shadow: var(--shadow-glow-flare);
+}
+
+@utility glass {
+  background: linear-gradient(180deg, var(--glass-from), var(--glass-to));
+  border: 1px solid var(--glass-border);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+@utility glass-strong {
+  background: linear-gradient(180deg, var(--glass-strong-from), var(--glass-strong-to));
+  border: 1px solid var(--glass-strong-border);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+}
+
+@utility text-gradient-volt {
+  background: var(--grad-volt);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@utility text-gradient-flare {
+  background: var(--grad-flare);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@utility pitch-grid {
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+@utility skeleton {
+  background: linear-gradient(90deg, var(--skeleton-a) 0%, var(--skeleton-b) 50%, var(--skeleton-a) 100%);
+  background-size: 200% 100%;
+  animation: var(--animate-shimmer);
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@utility safe-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
+}
+
+/* Film-grain overlay for depth; attach to a fixed full-screen element. */
+@utility noise {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E");
+  opacity: var(--noise-opacity);
+  mix-blend-mode: var(--noise-blend);
+  pointer-events: none;
+}
+
+/* ───────────────────────── Leaflet skin (theme-aware) ───────────────────────── */
+.leaflet-container {
+  background: var(--color-ink-850);
+  font-family: var(--font-sans);
+}
+.leaflet-control-attribution {
+  background: color-mix(in srgb, var(--color-ink-900) 75%, transparent) !important;
+  color: var(--color-subtle) !important;
+  font-size: 10px;
+}
+.leaflet-control-attribution a {
+  color: var(--color-muted) !important;
+}
+.leaflet-control-zoom a {
+  background: var(--color-ink-700) !important;
+  color: var(--color-fg) !important;
+  border-color: var(--glass-border) !important;
+}
+.leaflet-div-icon {
+  background: transparent;
+  border: none;
+}
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: var(--color-ink-700);
+  color: var(--color-fg);
+  border: 1px solid var(--glass-border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

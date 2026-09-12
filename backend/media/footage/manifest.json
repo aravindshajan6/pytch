@@ -1,0 +1,35 @@
+[
+  {
+    "file": "match-01.mp4",
+    "thumbnail": "match-01.jpg",
+    "duration_s": 55.96,
+    "width": 1280,
+    "height": 720,
+    "title": "Floodlit 5-a-side on artificial turf (Kuna vs Zona)",
+    "source": "https://commons.wikimedia.org/wiki/File:Kuna-Zona_175456.webm",
+    "license": "CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0/)",
+    "attribution": "\"Kuna-Zona 175456\" by Quahadi Añtó, via Wikimedia Commons, CC BY-SA 3.0. Transcoded to H.264 720p MP4."
+  },
+  {
+    "file": "match-02.mp4",
+    "thumbnail": "match-02.jpg",
+    "duration_s": 31.987,
+    "width": 1280,
+    "height": 720,
+    "title": "Amateur match from above: shot on goal",
+    "source": "https://commons.wikimedia.org/wiki/File:Amateurfu%C3%9Fball_Torschuss_von_oben.webm",
+    "license": "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)",
+    "attribution": "\"Amateurfußball Torschuss von oben\" by Maximilian Schönherr, via Wikimedia Commons, CC BY-SA 4.0. Cropped from 3840x2160 to the pitch area and scaled to 1280x720 H.264 MP4."
+  },
+  {
+    "file": "match-03.mp4",
+    "thumbnail": "match-03.jpg",
+    "duration_s": 60.224,
+    "width": 1280,
+    "height": 720,
+    "title": "Night futsal on an outdoor court",
+    "source": "https://commons.wikimedia.org/wiki/File:Zona_20140111_171421.ogv",
+    "license": "CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0/)",
+    "attribution": "\"Zona 20140111 171421\" by Quahadi Añtó, via Wikimedia Commons, CC BY-SA 3.0. Transcoded to H.264 720p MP4."
+  }
+]
