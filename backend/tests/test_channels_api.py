@@ -1,3 +1,4 @@
+
 """Channel API (API keys, scopes, rate limit, idempotency, conflicts) and signed webhook delivery."""
 
 import hashlib
@@ -5,6 +6,7 @@ import hmac
 from datetime import timedelta
 
 import httpx
+import pytest
 from sqlalchemy import func, select
 
 from app.core.timeutils import to_ist, utcnow
@@ -24,6 +26,8 @@ from tests.partner_helpers import (  # noqa: F401  (reset_fetch_hooks is an auto
     public_resolver,
     reset_fetch_hooks,
 )
+
+pytestmark = pytest.mark.usefixtures("channel_sync_on")  # these tests exercise automatic sync
 
 
 async def install_hook(client, owner, *, events: list[str], url: str = "https://hooks.example.com/pytch") -> dict:

@@ -89,3 +89,12 @@ def make_user(db):
 
 def auth_headers(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {create_token(user.id, 'access', session_id=uuid.uuid4())}"}
+
+
+@pytest.fixture
+def channel_sync_on(monkeypatch):
+    """Automatic channel sync (feeds, exports, Channel API, webhooks) is off by default — switch it on."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "channel_sync_enabled", True)
+

@@ -85,6 +85,9 @@ REGISTRY: dict[str, SettingDef] = {
                    lambda: True),
         SettingDef("partner_signups_enabled", "bool", "Partner applications enabled",
                    "Kill switch — when off, new venue partners can't submit applications.", lambda: True),
+        SettingDef("channel_sync_enabled", "bool", "Automatic channel sync",
+                   "Calendar-feed import/export, the Channel API and webhooks for venue partners. When off, partners "
+                   "log bookings from other apps by hand (clash alerts stay on).", _cfg("channel_sync_enabled")),
         SettingDef("maintenance_banner", "string", "Maintenance banner",
                    "Message shown at the top of the player app. Empty = hidden.", lambda: None, max_len=200),
         SettingDef("split_window_minutes", "int", "Split payment window (min)",

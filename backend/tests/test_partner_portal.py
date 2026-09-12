@@ -1,8 +1,10 @@
+
 """Partner portal: onboarding, approval gate, roles & venue scoping, provider profile, team, venues, bookings."""
 
 import uuid
 from datetime import timedelta
 
+import pytest
 from sqlalchemy import func, select
 
 from app.core.timeutils import to_ist, utcnow
@@ -14,6 +16,8 @@ from app.modules.slots.models import Slot
 from tests.conftest import auth_headers
 from tests.core_helpers import book
 from tests.partner_helpers import API, add_member, gen_slots, make_provider, partner_headers, provider_venue
+
+pytestmark = pytest.mark.usefixtures("channel_sync_on")  # these tests exercise automatic sync
 
 APPLICATION = {
     "business_name": "Smashpoint Arena",

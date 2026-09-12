@@ -19,7 +19,7 @@ from app.core.responses import ORJSONResponse
 from app.modules.channels import api
 from app.modules.channels.api import ApiKeyContext, require_scope
 from app.modules.channels.schemas import AvailabilityOut, ChannelBlockOut, ChannelBlockRequest, ChannelPitchOut
-from app.modules.channels.service import export_calendar
+from app.modules.channels.service import export_calendar, sync_enabled
 
 router = APIRouter(tags=["channels"])
 channel_api = APIRouter(prefix="/channel/v1", tags=["channel-api"])
@@ -63,7 +63,7 @@ async def cancel_block(external_ref: str, db: DB, ctx: WriteKey, idempotency_key
 @router.get("/ical/{filename}", include_in_schema=False)
 async def ical_export(filename: str, request: Request, db: DB) -> Response:
     token = filename[:-4] if filename.endswith(".ics") else ""
-    if not _TOKEN_RE.match(token):
+    if not _TOKEN_RE.match(token) or not await sync_enabled(db):
         raise NotFound("Calendar not found")
     await enforce(f"ical:{client_ip(request)}", 120, 60)
     body, etag = await export_calendar(db, token)

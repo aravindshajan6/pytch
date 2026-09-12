@@ -204,6 +204,27 @@ async def block_out(db: AsyncSession, block: SlotBlock) -> SlotBlockOut:
 # ─────────────────────────── webhooks (enqueue) ───────────────────────────
 
 
+class ChannelSyncDisabled(AppError):
+    code, status_code = "FEATURE_DISABLED", 403
+    message = "Automatic sync isn't switched on yet — log bookings from other apps on your calendar"
+
+
+async def sync_enabled(db: AsyncSession | None = None) -> bool:
+    from app.modules.platform.service import get_setting
+
+    return bool(await get_setting("channel_sync_enabled", db))
+
+
+async def ensure_sync_enabled(db: AsyncSession | None = None) -> None:
+    if not await sync_enabled(db):
+        raise ChannelSyncDisabled()
+
+
+async def require_sync_enabled() -> None:
+    """FastAPI dependency form of `ensure_sync_enabled`."""
+    await ensure_sync_enabled()
+
+
 async def enqueue_event(
     db: AsyncSession,
     provider_id: uuid.UUID,
@@ -215,6 +236,8 @@ async def enqueue_event(
     status: str,
 ) -> int:
     """Queue one signed delivery per subscribed webhook. Payload carries no PII. Caller commits."""
+    if not await sync_enabled(db):
+        return 0
     hooks = (
         await db.scalars(
             select(ProviderWebhook.id).where(

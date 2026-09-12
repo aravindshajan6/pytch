@@ -103,6 +103,25 @@ Residual risk is the lag of external systems; conflicts are surfaced, never sile
 | GET | `/partner/channels/conflicts` | `status?` (`open\|resolved\|ignored\|obsolete`) | `SyncConflictOut[]` (`holder_kind pytch\|block`, `lobby_status`, `holder_source`, `holder_label` — what actually holds the slot) |
 | POST 🧑‍💼 | `/partner/channels/conflicts/{id}/resolve` | `{resolution: kept_pytch\|moved_external\|ignored, note?}` | `SyncConflictOut` (`409` once it is no longer open) |
 
+**Manual mirroring to-do ("Blocked on other apps?").** Every Pytch booking on a partner venue creates a `block` task
+the moment it holds the slot (before payment); if that booking releases the slot (expired unpaid, cancelled, moved
+indoors) an open task closes as `obsolete`, a ticked-off one spawns an `unblock` task. Endpoints (any role, venue-scoped):
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET 🧑‍🔧 | `/partner/mirror-tasks?status=open\|done` | – | `MirrorTask[]` (open: games still ahead, soonest first) |
+| PATCH 🧑‍🔧 | `/partner/mirror-tasks/{id}` | `{done: boolean}` | `MirrorTask` (tick off / undo; audited `mirror_task.update`) |
+
+Realtime: partner sockets may subscribe to `venue:<turf_id>` (own venues, staff within scope; players never) →
+`mirror.task` (new block/unblock to-do: toast + chime), `mirror.task_closed` (released before blocking),
+`mirror.task_updated` (ticked off on another screen). Payloads carry pitch/venue/time/booking code only — no player data.
+
+**Automatic sync switch.** iCal import/export, the Channel API and webhooks are off unless an admin turns on
+`channel_sync_enabled` (Settings) or `CHANNEL_SYNC_ENABLED=true`. While off: creating feeds, export links, API keys or
+webhooks → `403 FEATURE_DISABLED` (deleting/revoking existing ones still works), `/ical/*` → 404, Channel API → 403,
+the import/delivery worker jobs idle, and `GET /partner/channels` returns `sync_enabled: false` (the portal shows the
+manual flow only). Manual logging of other-app bookings (`POST /partner/blocks`) and conflicts are always on.
+
 **iCal import** (worker, every `ICAL_IMPORT_INTERVAL_MINUTES`=5 per feed, conditional GET with ETag): each VEVENT (UID) in the next 14 days
 → upsert `SlotBlock(source=feed.source, external_ref=UID, feed_id)` over overlapping slots; the event title is kept as the block's label
 (`customer_name`, partner-only — never in player views or export feeds); events removed/cancelled upstream ⇒ block cancelled;

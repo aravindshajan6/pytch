@@ -354,3 +354,37 @@ async def test_avatar_url_path_tricks_rejected(client, make_user, url):
     user = await make_user("Avi")
     r = await client.patch(f"{API}/users/me", headers=auth_headers(user), json={"avatar_url": url})
     assert r.status_code == 422
+
+
+# Automatic channel sync is off by default: manual logging only, nothing reaches out or in automatically
+async def test_channel_sync_switched_off_by_default(client, db, make_user):
+    from app.modules.channels.jobs import deliver_webhooks, import_ical_feeds
+    from tests.partner_helpers import make_provider, partner_headers, provider_venue
+
+    owner = await make_user("Owner")
+    provider = await make_provider(db, owner)
+    _, pitch = await provider_venue(db, provider)
+    h = partner_headers(owner, provider.id)
+    overview = (await client.get(f"{API}/partner/channels", headers=h)).json()
+    assert overview["sync_enabled"] is False
+    for method, url, body in [
+        ("post", "/partner/channels/feeds", {"pitch_id": str(pitch.id), "source": "playo",
+                                             "url": "https://example.com/a.ics"}),
+        ("post", f"/partner/channels/exports/{pitch.id}", None),
+        ("post", "/partner/channels/api-keys", {"name": "POS", "scopes": ["availability:read"]}),
+        ("post", "/partner/channels/webhooks", {"url": "https://example.com/hook", "events": ["slot.booked"]}),
+    ]:
+        r = await getattr(client, method)(f"{API}{url}", headers=h, **({"json": body} if body else {}))
+        assert r.status_code == 403 and r.json()["error"]["code"] == "FEATURE_DISABLED", (url, r.text)
+    assert await import_ical_feeds(db) == 0 and await deliver_webhooks(db) == 0
+    assert (await client.get(f"{API}/ical/{'a' * 32}.ics")).status_code == 404
+    api_call = await client.get(f"{API}/channel/v1/pitches", headers={"Authorization": "Bearer pk_live_x"})
+    assert api_call.status_code in (401, 403)
+    # manual logging of another app's booking keeps working
+    from tests.partner_helpers import gen_slots
+    slot = (await gen_slots(db, pitch))[-1]
+    r = await client.post(f"{API}/partner/blocks", headers=h, json={
+        "pitch_id": str(pitch.id), "start_at": slot.start_at.isoformat(), "end_at": slot.end_at.isoformat(),
+        "kind": "booking", "source": "playo", "customer_name": "Playo booking", "amount_paise": 150000,
+        "payment_mode": "online_other"})
+    assert r.status_code == 201, r.text

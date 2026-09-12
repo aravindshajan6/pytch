@@ -1,5 +1,7 @@
+
 """The portals demo seed keeps every invariant and gives working demo logins (runs the full demo seed)."""
 
+import pytest
 from sqlalchemy import func, select
 
 from app.core.config import settings
@@ -14,6 +16,8 @@ from app.modules.slots.models import Slot
 from app.seed.builder import Seeder
 from app.seed.portals import ADMIN_PASSWORD, OWNER_PHONE, STAFF_PHONE, seed_portals
 from tests.partner_helpers import API
+
+pytestmark = pytest.mark.usefixtures("channel_sync_on")  # these tests exercise automatic sync
 
 
 async def _login(client, phone: str) -> dict[str, str]:

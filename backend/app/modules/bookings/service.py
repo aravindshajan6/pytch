@@ -10,6 +10,7 @@ from app.core.codes import booking_code, short_code
 from app.core.config import settings
 from app.core.constants import SPORTS
 from app.core.errors import AppError, NotFound
+from app.core.events import emit
 from app.core.ratelimit import enforce
 from app.core.timeutils import utcnow
 from app.modules.bookings.models import Booking
@@ -168,6 +169,8 @@ async def create_booking(db: AsyncSession, user: User, req: CreateBookingRequest
     )
     await db.flush()
     await slots.hold_slot(db, slot, user_id=user.id, until=deadline, booking_id=booking.id)
+    await db.flush()
+    await emit(db, "booking.created", lobby_id=lobby.id)  # e.g. partner "block it on your other apps" alert
     await lobbies.post_system_message(
         db, lobby.id,
         f"🏟️ {user.name} booked {lobbies.kickoff_label(slot.start_at)} — "

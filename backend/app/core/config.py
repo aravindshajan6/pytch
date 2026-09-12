@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     settlement_hold_hours: int = 24  # a booking becomes payable 24 h after its slot ends
     refund_dual_approval_paise: int = 500000  # refunds above ₹5,000 need a second admin
 
+    # Automatic channel sync (calendar-feed import/export, Channel API, webhooks). Off: partners log other-app
+    # bookings by hand (clash detection still on). Runtime-overridable by admins (`channel_sync_enabled`).
+    channel_sync_enabled: bool = False
     otp_ttl_seconds: int = 300
     otp_max_requests: int = 5
     otp_window_seconds: int = 600

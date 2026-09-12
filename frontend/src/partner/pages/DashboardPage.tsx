@@ -17,6 +17,7 @@ import { useToday, useTurfFilter, useVenues } from '../hooks'
 import { sourceMeta } from '../lib/sources'
 import { addDays, dayLabel, hhmmLabel, istDateOf, istTimeOf } from '../lib/time'
 import { useCan, useMembership, usePartnerAuth } from '../stores/partnerAuth'
+import { MirrorTodoCard } from '../components/Mirror'
 
 type Period = 'today' | 'week' | 'month'
 
@@ -56,6 +57,7 @@ export default function DashboardPage() {
       ) : (
         <div className={cn('space-y-5 transition-opacity', dash.isRefetching && 'opacity-90')}>
           <Alerts d={dash.data} manager={manager} owner={owner} />
+          <MirrorTodoCard />
 
           <section aria-label="Key numbers">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

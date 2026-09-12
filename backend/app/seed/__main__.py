@@ -63,6 +63,9 @@ def _print_portals(result: tuple[dict[str, int], PortalSeeder]) -> None:
           "Sneha Kurian +919999900013 (pending application)")
     print(f"  Admin console: admin@pytch.local (super_admin) · finance@pytch.local (finance) — password "
           f"{ADMIN_PASSWORD} (DEMO ONLY; MFA enrolment QR on first login)")
+    if not settings.channel_sync_enabled:
+        print("  Automatic channel sync is OFF (manual logging only) — set CHANNEL_SYNC_ENABLED=true or switch it on "
+              "in the admin console to use the demo Channel API key / iCal links.")
     if seeder.api_key:
         print(f"  Channel API key for Kochi Turf Co. (shown once): {seeder.api_key}")
     if seeder.export_url:

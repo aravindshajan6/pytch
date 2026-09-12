@@ -3,7 +3,7 @@
  * Endpoints: docs/PORTALS_CONTRACT.md §Partner. Conventions as in ./api.ts (snake_case, paise, UTC ISO).
  * Base: /api/v1/partner (audience "partner"). Acting provider via header `X-Provider-Id`.
  */
-import type { ISODate, ISODateTime, OtpRequestResponse, Page, Pitch, Sport, TurfDetail, UUID, UserPublic } from './api'
+import type { ISODate, ISODateTime, MirrorTaskEvent, OtpRequestResponse, Page, Pitch, Sport, TurfDetail, UUID, UserPublic } from './api'
 
 export type { OtpRequestResponse }
 
@@ -515,4 +515,14 @@ export interface ChannelsOverview {
   webhooks: WebhookOut[]
   open_conflicts: number
   api_base_url: string // e.g. https://pytch.in/api/v1/channel/v1
+  /** Automatic sync (calendar feeds, exports, Channel API, webhooks) switched on by Pytch. Off → manual logging only. */
+  sync_enabled?: boolean
 }
+
+/** "Blocked on other apps?" to-do: a Pytch booking to block (or, once released, free) on the venue's other apps. */
+export interface MirrorTask extends MirrorTaskEvent {
+  created_at: ISODateTime
+  resolved_at: ISODateTime | null
+  resolved_by_name: string | null
+}
+

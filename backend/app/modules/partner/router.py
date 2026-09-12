@@ -17,7 +17,7 @@ from app.core.errors import Forbidden, NotFound
 from app.core.pagination import PageParams, page_params
 from app.core.ratelimit import client_ip, enforce, user_agent
 from app.modules.auth.schemas import OtpRequest, OtpRequestResponse, OtpVerify, RefreshRequest
-from app.modules.channels import manage
+from app.modules.channels import manage, mirror
 from app.modules.channels import service as channels
 from app.modules.channels.models import SlotBlock
 from app.modules.channels.schemas import (
@@ -32,6 +32,8 @@ from app.modules.channels.schemas import (
     CreateWebhookRequest,
     ExportOut,
     FeedOut,
+    MirrorTaskOut,
+    MirrorTaskUpdate,
     ResolveConflictRequest,
     SlotBlockOut,
     SyncConflictOut,
@@ -39,6 +41,7 @@ from app.modules.channels.schemas import (
     UpdateFeedRequest,
     WebhookTestResult,
 )
+from app.modules.channels.service import require_sync_enabled
 from app.modules.partner import auth, finance, operations, service, venues
 from app.modules.partner.deps import (
     Partner,
@@ -63,7 +66,7 @@ from app.modules.partner.schemas import (
     SettlementOut,
     VenueUpdate,
 )
-from app.modules.partner.scope import get_pitch, partner_actor
+from app.modules.partner.scope import get_pitch, partner_actor, scoped_turf_ids
 from app.modules.providers.schemas import (
     InviteMemberRequest,
     PartnerMemberOut,
@@ -315,17 +318,22 @@ async def remove_member(member_id: uuid.UUID, ctx: PartnerOwner, db: DB) -> Resp
 # ─────────────────────────── channels ───────────────────────────
 
 
+# Automatic sync (feeds, exports, API keys, webhooks) is behind the `channel_sync_enabled` switch; removing /
+# revoking existing ones stays allowed so partners can always clean up. Manual logging + conflicts are always on.
+SyncOn = Depends(require_sync_enabled)  # runs before body validation → a clear 403 FEATURE_DISABLED
+
+
 @router.get("/channels", response_model=ChannelsOverview)
 async def channels_overview(ctx: Partner, db: DB) -> ChannelsOverview:
     return await manage.overview(db, ctx)
 
 
-@router.post("/channels/feeds", response_model=FeedOut, status_code=201)
+@router.post("/channels/feeds", response_model=FeedOut, status_code=201, dependencies=[SyncOn])
 async def create_feed(body: CreateFeedRequest, ctx: PartnerManager, db: DB) -> FeedOut:
     return await manage.create_feed(db, ctx, body)
 
 
-@router.patch("/channels/feeds/{feed_id}", response_model=FeedOut)
+@router.patch("/channels/feeds/{feed_id}", response_model=FeedOut, dependencies=[SyncOn])
 async def update_feed(feed_id: uuid.UUID, body: UpdateFeedRequest, ctx: PartnerManager, db: DB) -> FeedOut:
     return await manage.update_feed(db, ctx, feed_id, body)
 
@@ -336,12 +344,12 @@ async def delete_feed(feed_id: uuid.UUID, ctx: PartnerManager, db: DB) -> Respon
     return Response(status_code=204)
 
 
-@router.post("/channels/feeds/{feed_id}/sync", response_model=FeedOut)
+@router.post("/channels/feeds/{feed_id}/sync", response_model=FeedOut, dependencies=[SyncOn])
 async def sync_feed(feed_id: uuid.UUID, ctx: Partner, db: DB) -> FeedOut:
     return await manage.sync_feed_now(db, ctx, feed_id)
 
 
-@router.post("/channels/exports/{pitch_id}", response_model=ExportOut)
+@router.post("/channels/exports/{pitch_id}", response_model=ExportOut, dependencies=[SyncOn])
 async def rotate_export(pitch_id: uuid.UUID, ctx: PartnerManager, db: DB) -> ExportOut:
     return await manage.rotate_export(db, ctx, pitch_id)
 
@@ -352,7 +360,7 @@ async def disable_export(pitch_id: uuid.UUID, ctx: PartnerManager, db: DB) -> Re
     return Response(status_code=204)
 
 
-@router.post("/channels/api-keys", response_model=CreatedApiKey, status_code=201)
+@router.post("/channels/api-keys", response_model=CreatedApiKey, status_code=201, dependencies=[SyncOn])
 async def create_api_key(body: CreateApiKeyRequest, ctx: PartnerOwner, db: DB) -> CreatedApiKey:
     return await manage.create_api_key(db, ctx, body)
 
@@ -363,7 +371,7 @@ async def revoke_api_key(key_id: uuid.UUID, ctx: PartnerOwner, db: DB) -> Respon
     return Response(status_code=204)
 
 
-@router.post("/channels/webhooks", response_model=CreatedWebhook, status_code=201)
+@router.post("/channels/webhooks", response_model=CreatedWebhook, status_code=201, dependencies=[SyncOn])
 async def create_webhook(body: CreateWebhookRequest, ctx: PartnerOwner, db: DB) -> CreatedWebhook:
     return await manage.create_webhook(db, ctx, body)
 
@@ -374,9 +382,39 @@ async def delete_webhook(hook_id: uuid.UUID, ctx: PartnerOwner, db: DB) -> Respo
     return Response(status_code=204)
 
 
-@router.post("/channels/webhooks/{hook_id}/test", response_model=WebhookTestResult)
+@router.post("/channels/webhooks/{hook_id}/test", response_model=WebhookTestResult, dependencies=[SyncOn])
 async def test_webhook(hook_id: uuid.UUID, ctx: PartnerOwner, db: DB) -> WebhookTestResult:
     return await manage.test_webhook(db, ctx, hook_id)
+
+
+# ─────────── "Blocked on other apps?" — front-desk mirroring to-do ───────────
+
+
+def _mirror_out(task, pitch_name: str, turf_name: str, resolved_by: str | None) -> MirrorTaskOut:
+    return MirrorTaskOut(
+        id=task.id, action=task.action, status=task.status, booking_code=task.booking_code, pitch_id=task.pitch_id,
+        pitch_name=pitch_name, turf_id=task.turf_id, turf_name=turf_name, start_at=task.start_at, end_at=task.end_at,
+        created_at=task.created_at, resolved_at=task.resolved_at, resolved_by_name=resolved_by,
+    )
+
+
+@router.get("/mirror-tasks", response_model=list[MirrorTaskOut])
+async def mirror_tasks(ctx: Partner, db: DB, status: Literal["open", "done"] = "open") -> list[MirrorTaskOut]:
+    """Pytch bookings to block (or free) on the venue's other apps — open ones only while the game is ahead."""
+    rows = await mirror.list_tasks(db, ctx.provider.id, await scoped_turf_ids(db, ctx), status=status)
+    return [_mirror_out(*r) for r in rows]
+
+
+@router.patch("/mirror-tasks/{task_id}", response_model=MirrorTaskOut)
+async def update_mirror_task(task_id: uuid.UUID, body: MirrorTaskUpdate, ctx: Partner, db: DB) -> MirrorTaskOut:
+    """Tick off ("done — blocked / freed on my other apps") or undo. Any role, incl. front-desk staff."""
+    task, pitch_name, turf_name = await mirror.set_status(
+        db, ctx.provider.id, await scoped_turf_ids(db, ctx), task_id, done=body.done, user_id=ctx.user.id)
+    verb = ("blocked" if task.action == "block" else "freed") if body.done else "reopened"
+    await service._audit(db, ctx, "mirror_task.update", f"Other apps {verb}: {task.booking_code} · {pitch_name}",
+                         target_type="mirror_task", target_id=task.id, changes={"status": task.status})
+    await db.commit()
+    return _mirror_out(task, pitch_name, turf_name, ctx.user.name if body.done else None)
 
 
 @router.get("/channels/conflicts", response_model=list[SyncConflictOut])

@@ -150,6 +150,7 @@ async def overview(db: AsyncSession, ctx: PartnerContext) -> ChannelsOverview:
         webhooks=[webhook_out(h) for h in hooks],
         open_conflicts=int(open_conflicts),
         api_base_url=api_base_url(),
+        sync_enabled=await service.sync_enabled(db),
     )
 
 

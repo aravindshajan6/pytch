@@ -93,6 +93,21 @@ async def _partner_can_watch_pitch(user_id: uuid.UUID, pitch_id: uuid.UUID) -> b
     return any(scope is None or str(turf_id) in {str(t) for t in scope} for scope, turf_id in rows)
 
 
+async def _partner_can_watch_venue(user_id: uuid.UUID, turf_id: uuid.UUID) -> bool:
+    """Partner-only `venue:<turf_id>` (front-desk alerts): active member of the approved owner, within scope."""
+    async with SessionLocal() as db:
+        scopes = (
+            await db.scalars(
+                select(ProviderMember.turf_ids)
+                .join(Provider, Provider.id == ProviderMember.provider_id)
+                .join(Turf, Turf.provider_id == Provider.id)
+                .where(Turf.id == turf_id, Provider.status == "approved", ProviderMember.user_id == user_id,
+                       ProviderMember.status == "active")
+            )
+        ).all()
+    return any(scope is None or str(turf_id) in {str(t) for t in scope} for scope in scopes)
+
+
 async def _can_subscribe(user_id: uuid.UUID, channel: str, audience: str = "app") -> bool:
     kind, _, raw_id = channel.partition(":")
     try:
@@ -101,7 +116,9 @@ async def _can_subscribe(user_id: uuid.UUID, channel: str, audience: str = "app"
         return False
     if kind == "user":
         return target == user_id
-    if audience == "partner":  # venue staff: only live availability of their own pitches
+    if audience == "partner":  # venue staff: live availability of their own pitches, alerts for their venues
+        if kind == "venue":
+            return await _partner_can_watch_venue(user_id, target)
         return kind == "pitch" and await _partner_can_watch_pitch(user_id, target)
     if kind == "pitch":  # live availability of a real, bookable pitch
         async with SessionLocal() as db:

@@ -9,7 +9,7 @@ export function OtherAppsSection() {
     <Panel
       id="apps"
       title="Other booking apps"
-      subtitle="Playo, Hudle and KheloMore don’t offer calendar sync to venues — so mirror each of their bookings here the moment it comes in."
+      subtitle="Bookings from Playo, Hudle and KheloMore don’t reach Pytch on their own — so mirror each one here the moment it comes in."
     >
       <ol className="mb-5 grid gap-2 sm:grid-cols-3">
         {[
@@ -50,7 +50,7 @@ export function OtherAppsSection() {
       </div>
       <p className="mt-4 flex items-start gap-2 text-xs text-muted">
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        Works the other way too: when a Pytch booking comes in, block that slot in the other apps. Add your iCal export to your phone calendar so you see Pytch bookings wherever you are.
+        Works the other way too: the moment a Pytch booking comes in, block that slot in your other apps.
       </p>
     </Panel>
   )

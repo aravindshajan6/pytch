@@ -7,6 +7,7 @@ import type {
   ApiKeyOut,
   BlockSource,
   BulkBlockRequest,
+  MirrorTask,
   BulkBlockResult,
   CalendarView,
   ChannelsOverview,
@@ -105,6 +106,10 @@ export const partnerApi = {
     remove: (id: UUID) => http.delete<void>(`/team/${id}`),
   },
 
+  mirror: {
+    list: (status: 'open' | 'done' = 'open') => http.get<MirrorTask[]>('/mirror-tasks', { status }),
+    update: (id: UUID, done: boolean) => http.patch<MirrorTask>(`/mirror-tasks/${id}`, { done }),
+  },
   channels: {
     overview: () => http.get<ChannelsOverview>('/channels'),
     createFeed: (body: CreateFeedRequest) => http.post<FeedOut>('/channels/feeds', body),

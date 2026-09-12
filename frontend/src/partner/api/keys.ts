@@ -20,5 +20,7 @@ export const pk = {
   settlement: (id: UUID) => ['partner', 'settlements', id] as const,
   team: ['partner', 'team'] as const,
   channels: ['partner', 'channels'] as const,
+  mirror: (status: 'open' | 'done') => ['partner', 'mirror', status] as const,
+  mirrorAll: ['partner', 'mirror'] as const,
   conflicts: (status?: string) => ['partner', 'channels', 'conflicts', status ?? 'all'] as const,
 }

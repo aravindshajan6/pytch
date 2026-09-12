@@ -1,9 +1,11 @@
+
 """Blocks go through the same slot lock as Pytch bookings: lock/claim, concurrency, bulk, cancel, calendar."""
 
 import asyncio
 import uuid
 from datetime import timedelta
 
+import pytest
 from sqlalchemy import func, select
 
 from app.core.timeutils import to_ist
@@ -21,6 +23,8 @@ from tests.partner_helpers import (  # noqa: F401  (reset_fetch_hooks: autouse f
     provider_venue,
     reset_fetch_hooks,
 )
+
+pytestmark = pytest.mark.usefixtures("channel_sync_on")  # these tests exercise automatic sync
 
 
 def _block_body(pitch, start, end, **kw):

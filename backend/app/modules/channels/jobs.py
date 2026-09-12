@@ -15,7 +15,7 @@ from app.modules.audit import service as audit
 from app.modules.channels import fetch
 from app.modules.channels.manage import signed_headers
 from app.modules.channels.models import ChannelFeed, ProviderWebhook, WebhookDelivery
-from app.modules.channels.service import sync_feed
+from app.modules.channels.service import sync_enabled, sync_feed
 from app.modules.notifications.service import notify_many
 from app.modules.providers.models import Provider
 from app.modules.providers.service import owner_user_ids
@@ -36,6 +36,8 @@ def backoff(attempts: int) -> timedelta:
 async def import_ical_feeds(db: AsyncSession) -> int:
     """Poll every due feed (last sync older than ICAL_IMPORT_INTERVAL_MINUTES). One feed failing never affects
     another: each runs in its own transaction and unexpected errors are contained."""
+    if not await sync_enabled(db):
+        return 0
     now = utcnow()
     cutoff = now - timedelta(minutes=settings.ical_import_interval_minutes)
     feed_ids = (
@@ -125,6 +127,8 @@ async def _deliver_one(db: AsyncSession, delivery_id: uuid.UUID) -> None:
 async def deliver_webhooks(db: AsyncSession) -> int:
     """Send due deliveries. Rows are claimed with SKIP LOCKED + a short lease, so several workers never send the
     same delivery concurrently and no row lock is held during the HTTP call."""
+    if not await sync_enabled(db):
+        return 0
     now = utcnow()
     due = (
         await db.scalars(

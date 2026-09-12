@@ -70,6 +70,9 @@ async def get_api_key(db: DB, creds: Credentials) -> ApiKeyContext:
 
 def require_scope(scope: str) -> Callable[..., Awaitable[ApiKeyContext]]:
     async def _dep(ctx: ApiKeyContext = Depends(get_api_key)) -> ApiKeyContext:
+        from app.modules.channels.service import ensure_sync_enabled
+
+        await ensure_sync_enabled()
         if scope not in (ctx.key.scopes or []):
             raise Forbidden(f"This API key lacks the “{scope}” scope")
         return ctx

@@ -471,6 +471,27 @@ class PortalSeeder:
             self.counts["settlements"] += 1
         await self.db.flush()
 
+    async def mirror_todos(self) -> None:
+        """"Blocked on other apps?" to-dos for upcoming Pytch games at partner venues (the demo lobbies are seeded
+        directly, so the booking.created handler never ran). Games more than a day out are already ticked off."""
+        from app.modules.bookings.models import Booking
+        from app.modules.channels import mirror
+        from app.modules.channels.models import MirrorTask
+
+        now = utcnow()
+        rows = (await self.db.execute(
+            select(Lobby.id, Lobby.slot_id, Booking.code, Lobby.start_at)
+            .join(Booking, Booking.id == Lobby.booking_id).join(Turf, Turf.id == Lobby.turf_id)
+            .where(Lobby.status.in_(("forming", "confirmed")), Lobby.start_at > now, Turf.provider_id.is_not(None))
+        )).all()
+        owner = self.users[OWNER_PHONE]
+        for lobby_id, slot_id, code, start_at in rows:
+            await mirror.slot_taken(self.db, lobby_id=lobby_id, slot_id=slot_id, booking_code=code)
+            if start_at - now > timedelta(days=1):
+                task = await self.db.scalar(select(MirrorTask).where(MirrorTask.lobby_id == lobby_id))
+                if task is not None:
+                    task.status, task.resolved_at, task.resolved_by_user_id = "done", now, owner.id
+
     async def run(self) -> dict[str, int]:
         await self.admin_accounts()
         await self.provider_accounts()
@@ -479,6 +500,7 @@ class PortalSeeder:
         await self.channels()
         await self.coupons()
         await self.settlements()
+        await self.mirror_todos()
         await self.db.commit()
         return {"providers": len(self.providers) + 1, "blocks": self.counts["blocks"],
                 "conflicts": self.counts["conflicts"], "coupons": self.counts["coupons"],

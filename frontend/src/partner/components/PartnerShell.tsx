@@ -34,6 +34,7 @@ import { useResetPartnerCache, useTurfFilter, useVenues } from '../hooks'
 import { RANK, ROLE_LABEL, useLogout } from '../session'
 import { useCan, useMembership, usePartnerAuth } from '../stores/partnerAuth'
 import { Select, StatusPill } from './kit'
+import { MirrorAlerts, MirrorTodoButton } from './Mirror'
 
 interface NavItem {
   to: string
@@ -107,6 +108,8 @@ export function PartnerShell() {
         <div className="noise absolute inset-0" />
       </div>
 
+      <MirrorAlerts />
+
       {/* Desktop sidebar */}
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col border-r border-white/6 bg-ink-900/75 px-3 py-5 backdrop-blur-xl lg:flex">
         <BrandMark />
@@ -127,6 +130,7 @@ export function PartnerShell() {
           </Link>
           <VenueSwitcher className="min-w-0 flex-1 sm:max-w-xs" />
           <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <MirrorTodoButton />
             <LiveIndicator />
             <ThemeToggle />
             <UserMenu className="hidden lg:block" />

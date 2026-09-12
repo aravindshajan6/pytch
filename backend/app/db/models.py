@@ -8,6 +8,7 @@ from app.modules.bench.models import BenchStatus, SOSDispatch, SOSRequest
 from app.modules.bookings.models import Booking
 from app.modules.channels.models import (
     ChannelFeed,
+    MirrorTask,
     ProviderApiKey,
     ProviderWebhook,
     SlotBlock,
@@ -38,6 +39,7 @@ __all__ = [
     "Base",
     "Broadcast",
     "ChannelFeed",
+    "MirrorTask",
     "Coupon",
     "CouponRedemption",
     "Provider",

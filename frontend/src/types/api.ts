@@ -842,6 +842,24 @@ export interface WsEventMap {
   'wallet.updated': { balance_paise: number }
   'badge.earned': Badge
   'level.up': { level: number }
+  // partner portal only (`venue:<turf_id>` channel): "block / free this Pytch booking on your other apps"
+  'mirror.task': MirrorTaskEvent
+  'mirror.task_closed': MirrorTaskEvent
+  'mirror.task_updated': MirrorTaskEvent
+}
+
+/** A front-desk to-do pushed to partners (manual sync with their other booking apps). No player details. */
+export interface MirrorTaskEvent {
+  id: UUID
+  action: 'block' | 'unblock'
+  status: 'open' | 'done' | 'obsolete'
+  booking_code: string
+  pitch_id: UUID
+  pitch_name: string
+  turf_id: UUID
+  turf_name: string
+  start_at: ISODateTime
+  end_at: ISODateTime
 }
 
 export type WsEventName = keyof WsEventMap

@@ -27,6 +27,8 @@ from tests.partner_helpers import (  # noqa: F401  (reset_fetch_hooks: autouse f
     reset_fetch_hooks,
 )
 
+pytestmark = pytest.mark.usefixtures("channel_sync_on")  # these tests exercise automatic sync
+
 
 def _ics(*events: tuple[str, object, object, str]) -> bytes:
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Test//Front desk//EN"]

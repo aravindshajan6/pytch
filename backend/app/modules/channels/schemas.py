@@ -236,6 +236,7 @@ class ChannelsOverview(Schema):
     webhooks: list[WebhookOut]
     open_conflicts: int
     api_base_url: str
+    sync_enabled: bool = False  # automatic sync switched on by Pytch (else: manual logging only)
 
 
 # ───────────── Channel API (integrators) ─────────────
@@ -289,3 +290,29 @@ class ChannelBlockOut(Schema):
     external_ref: str | None
     status: BlockStatus
 
+
+
+# ───────────── manual mirroring (front-desk to-do) ─────────────
+
+MirrorAction = Literal["block", "unblock"]
+MirrorStatus = Literal["open", "done", "obsolete"]
+
+
+class MirrorTaskOut(Schema):
+    id: uuid.UUID
+    action: MirrorAction  # block = "block it on your other apps"; unblock = "free it on your other apps"
+    status: MirrorStatus
+    booking_code: str
+    pitch_id: uuid.UUID
+    pitch_name: str
+    turf_id: uuid.UUID
+    turf_name: str
+    start_at: datetime
+    end_at: datetime
+    created_at: datetime
+    resolved_at: datetime | None
+    resolved_by_name: str | None
+
+
+class MirrorTaskUpdate(InputSchema):
+    done: bool
