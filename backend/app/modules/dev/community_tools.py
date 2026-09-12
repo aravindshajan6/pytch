@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.codes import booking_code, short_code
 from app.core.config import settings
 from app.core.deps import DB, CurrentUser
-from app.core.errors import AppError, Conflict, NotFound
+from app.core.errors import AppError, Conflict, Forbidden, NotFound
 from app.core.geo import haversine_sql
 from app.core.timeutils import IST, to_ist, utcnow
 from app.modules.bench import service as bench
@@ -52,9 +52,10 @@ async def create_storm(db: AsyncSession, lobby_id: uuid.UUID, user: User) -> Wea
     lobby = await db.get(Lobby, lobby_id)
     if lobby is None:
         raise NotFound("Match not found")
-    active = {m.user_id for m in lobby.members if m.status in ("joined", "paid")} | {lobby.host_id}
-    if user.id not in active:
-        raise NotMember()
+    if lobby.host_id != user.id:  # only the host decides about the weather (it drives rain-check money)
+        if any(m.user_id == user.id and m.status in ("joined", "paid") for m in lobby.members):
+            raise Forbidden("Only the host can summon a storm on this match")
+        raise NotFound("Match not found")
     if lobby.status not in ("forming", "confirmed") or lobby.start_at <= utcnow():
         raise Conflict("Storms can only hit upcoming matches", code="LOBBY_CLOSED")
     existing = await db.scalar(

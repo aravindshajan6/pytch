@@ -117,6 +117,8 @@ def test_verified_criteria_labels_and_eligibility():
     assert all(c.label and c.met for c in keys.values())
     s.no_shows = 2
     assert not rs.is_verified_eligible(s)
+    fresh = _stats_with(0, 5)  # FUNC5-22: no ratings yet → "no more than 1 no-show" isn't met by default
+    assert not {c.key: c for c in rs.verified_criteria(fresh)}["no_shows"].met
 
 
 # ───────────────────────────── submission rules ─────────────────────────────

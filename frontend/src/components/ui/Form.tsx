@@ -113,23 +113,26 @@ export function Stepper({
   onChange,
   min,
   max,
+  label = 'value',
 }: {
   value: number
   onChange: (v: number) => void
   min: number
   max: number
+  /** What is being counted, for screen readers ("players"). */
+  label?: string
 }) {
   const btn =
     'h-10 w-10 cursor-pointer rounded-xl bg-white/6 text-lg font-bold ring-1 ring-white/10 transition hover:bg-white/12 disabled:opacity-30'
   return (
-    <div className="inline-flex items-center gap-3">
-      <button type="button" className={btn} disabled={value <= min} onClick={() => onChange(value - 1)}>
+    <div className="inline-flex items-center gap-3" role="group" aria-label={label}>
+      <button type="button" className={btn} disabled={value <= min} onClick={() => onChange(value - 1)} aria-label={`Fewer ${label}`}>
         −
       </button>
-      <motion.span key={value} initial={{ scale: 1.3, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="w-8 text-center font-display text-xl">
+      <motion.span key={value} initial={{ scale: 1.3, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="w-8 text-center font-display text-xl" aria-live="polite">
         {value}
       </motion.span>
-      <button type="button" className={btn} disabled={value >= max} onClick={() => onChange(value + 1)}>
+      <button type="button" className={btn} disabled={value >= max} onClick={() => onChange(value + 1)} aria-label={`More ${label}`}>
         +
       </button>
     </div>

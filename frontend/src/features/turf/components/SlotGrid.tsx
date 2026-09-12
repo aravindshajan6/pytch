@@ -144,10 +144,11 @@ function SlotTile({ slot, flash, onBook }: { slot: Slot; flash?: number; onBook:
   }
 
   return (
-    <div className={cn(base, 'bg-white/[0.02] opacity-50 ring-1 ring-white/5')} aria-label={`${range}: ${slot.status === 'booked' ? 'booked' : 'unavailable'}`}>
+    <div className={cn(base, 'bg-white/[0.02] opacity-50 ring-1 ring-white/5')} aria-label={`${range}: booked`}>
       {flashEl}
       {top(true)}
-      <span className="text-[11px] font-semibold text-subtle">{slot.status === 'booked' ? 'Booked' : 'Unavailable'}</span>
+      {/* booked on Pytch or blocked by the venue (walk-in, other app, maintenance) — both read as taken */}
+      <span className="text-[11px] font-semibold text-subtle">Booked</span>
     </div>
   )
 }

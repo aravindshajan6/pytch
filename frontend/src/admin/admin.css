@@ -1,0 +1,66 @@
+/* Admin-console-only tokens. Loaded after globals.css (same cascade position as its theme blocks).
+   Chart palette: 5 categorical slots validated with the dataviz validator
+   (adjacent pairs, CVD ΔE ≥ 8, normal-vision ΔE ≥ 15, ≥ 3:1 vs the card surface) in both themes.
+   Order is fixed: 1 lime · 2 grape · 3 amber · 4 cyan · 5 flare. */
+:root,
+[data-theme='dark'] {
+  --chart-1: #7aa21a;
+  --chart-2: #8a67f3;
+  --chart-3: #cb8100;
+  --chart-4: #0da2c6;
+  --chart-5: #e94779;
+  --chart-accent: var(--color-volt); /* single-series emphasis */
+  --chart-prev: #6b7a74; /* comparison / de-emphasis */
+  --chart-grid: #18211e;
+  --chart-axis: #2a3531;
+  --chart-surface: #0e1213;
+  --chart-seq: var(--color-volt); /* sequential ramp #1 (heatmap) */
+  --chart-seq-2: var(--color-electric); /* sequential ramp #2 (cohorts) */
+  --admin-row-hover: rgb(255 255 255 / 0.035);
+  --admin-sidebar: rgb(8 13 12 / 0.72);
+}
+
+[data-theme='light'] {
+  --chart-1: #4c7f00;
+  --chart-2: #6c33ce;
+  --chart-3: #b75f0b;
+  --chart-4: #007597;
+  --chart-5: #d12c5e;
+  --chart-prev: #8c9a93;
+  --chart-grid: #e8ede5;
+  --chart-axis: #cfd8cb;
+  --chart-surface: #fcfdfb;
+  --admin-row-hover: rgb(14 42 26 / 0.035);
+  --admin-sidebar: rgb(255 255 255 / 0.78);
+}
+
+/* Segmented / tab controls never wrap their labels onto two lines. */
+[role='tablist'] > button {
+  white-space: nowrap;
+}
+
+/* Tabular figures only where numbers align in columns (tables, axes). */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+@keyframes admin-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-6px); }
+  40%, 80% { transform: translateX(6px); }
+}
+.animate-shake {
+  animation: admin-shake 0.4s ease-in-out;
+}
+
+/* Recharts: no focus outline on the svg wrapper itself (points carry their own). */
+.recharts-wrapper:focus,
+.recharts-surface:focus {
+  outline: none;
+}
+
+@media print {
+  aside, header, .no-print { display: none !important; }
+}

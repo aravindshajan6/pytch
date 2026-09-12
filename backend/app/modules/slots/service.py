@@ -3,6 +3,10 @@
 State machine (every transition publishes `slot.updated` on `pitch:<pitch_id>` after commit):
     available ──hold──▶ held ──book──▶ booked
     held / booked ──release──▶ available
+    available ──block──▶ blocked ──unblock──▶ available      (walk-ins, other apps, maintenance — `channels`)
+
+Slots of provider-owned venues also enqueue signed webhooks for the venue's integrations
+(`channels.service.on_slot_changed`, lazily imported). Player views only ever see the status.
 """
 
 import uuid
@@ -129,6 +133,15 @@ def _publish(db: AsyncSession, slot: Slot) -> None:
     )
 
 
+async def _channel_hook(db: AsyncSession, slot: Slot, event: str) -> None:
+    """Enqueue venue webhooks for this transition (no-op for venues without a provider/webhooks)."""
+    try:
+        from app.modules.channels.service import on_slot_changed
+    except ImportError:  # pragma: no cover - channels module is optional
+        return
+    await on_slot_changed(db, slot, event)
+
+
 async def hold_slot(
     db: AsyncSession, slot: Slot, *, user_id: uuid.UUID, until: datetime, booking_id: uuid.UUID
 ) -> None:
@@ -142,6 +155,7 @@ async def hold_slot(
     slot.held_by_id = user_id
     slot.booking_id = booking_id
     _publish(db, slot)
+    await _channel_hook(db, slot, "slot.booked")
 
 
 async def book_slot(db: AsyncSession, slot: Slot) -> None:
@@ -153,16 +167,46 @@ async def book_slot(db: AsyncSession, slot: Slot) -> None:
     slot.status = "booked"
     slot.held_until = None
     _publish(db, slot)
+    await _channel_hook(db, slot, "slot.booked")
 
 
 async def release_slot(db: AsyncSession, slot: Slot) -> None:
-    """→ available, clearing hold/booking fields. Caller commits."""
+    """→ available, clearing hold/booking fields. Caller commits.
+
+    Blocked slots are never released here (a stale lobby must not free a walk-in); use `unblock_slot`.
+    """
+    if slot.status == "blocked":
+        return
     if slot.status == "available" and slot.booking_id is None:
         return
     slot.status = "available"
     slot.held_until = None
     slot.held_by_id = None
     slot.booking_id = None
+    _publish(db, slot)
+    await _channel_hook(db, slot, "slot.released")
+
+
+async def block_slot(db: AsyncSession, slot: Slot, block_id: uuid.UUID) -> None:
+    """available → blocked by a `SlotBlock`. Caller holds the row lock, enqueues the (per-block) webhook
+    and commits."""
+    if slot.status != "available":
+        raise SlotUnavailable()
+    slot.status = "blocked"
+    slot.block_id = block_id
+    slot.held_until = None
+    slot.held_by_id = None
+    slot.booking_id = None
+    _publish(db, slot)
+
+
+async def unblock_slot(db: AsyncSession, slot: Slot) -> None:
+    """blocked → available. Caller holds the row lock and commits."""
+    if slot.status != "blocked":
+        slot.block_id = None
+        return
+    slot.status = "available"
+    slot.block_id = None
     _publish(db, slot)
 
 
@@ -260,8 +304,11 @@ async def _weather_for(pitch: Pitch, slots: Sequence[Slot]) -> dict[Any, Any]:
 
 
 async def get_pitch(db: AsyncSession, pitch_id: uuid.UUID) -> Pitch:
+    """A pitch players can see: active, at a listed venue (active, partner approved), sport enabled."""
+    from app.modules.turfs.availability import pitch_bookable
+
     pitch = await db.get(Pitch, pitch_id)
-    if pitch is None or not pitch.is_active:
+    if pitch is None or not await pitch_bookable(db, pitch):
         raise NotFound("Pitch not found")
     return pitch
 
@@ -297,8 +344,12 @@ async def get_slot(db: AsyncSession, slot_id: uuid.UUID) -> Slot:
 
 
 async def slot_detail(db: AsyncSession, slot_id: uuid.UUID) -> SlotDetail:
+    from app.modules.turfs.availability import pitch_bookable
+
     slot = await get_slot(db, slot_id)
     pitch: Pitch = slot.pitch
+    if not await pitch_bookable(db, pitch):  # closed venue / suspended partner / disabled sport
+        raise NotFound("Slot not found")
     open_lobbies = await _open_lobbies_by_slot(db, [slot.id])
     weather = await _weather_for(pitch, [slot])
     return SlotDetail(

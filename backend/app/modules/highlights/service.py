@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import ColumnElement, delete, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,8 +21,10 @@ from app.core.config import settings
 from app.core.errors import AppError, Conflict, Forbidden, NotFound
 from app.core.logging import logger
 from app.core.pagination import Page
+from app.core.redis import get_redis
 from app.core.timeutils import utcnow
 from app.modules.gamification.catalog import XP
+from app.modules.gamification.models import XpEvent
 from app.modules.gamification.service import award_badge, award_xp, get_stats_for_update
 from app.modules.highlights.models import Clip, ClipLike, Recording
 from app.modules.highlights.schemas import ClipOut, CreateClipRequest, RecordingOut, RecordingSummary
@@ -32,6 +34,9 @@ from app.modules.users.models import User
 from app.modules.users.schemas import UserPublic
 from app.realtime.publisher import lobby_channel, publish_on_commit
 
+CLIP_XP_PREFIX = "Clipped"
+VIEW_KEY_PREFIX = "pytch:clip-view:"
+VIEW_DEDUP_SECONDS = 24 * 3600
 PROCESS_DELAY = timedelta(seconds=20)
 STUCK_AFTER = timedelta(minutes=10)
 BATCH = 10
@@ -113,6 +118,32 @@ async def footage_for(lobby_id: uuid.UUID) -> tuple[str, str | None, float] | No
 # ───────────────────────────── read models ─────────────────────────────
 def _participant_ids(lobby: Lobby) -> set[uuid.UUID]:
     return {m.user_id for m in lobby.members if m.status == "paid"} | {lobby.host_id}
+
+
+def _can_see(lobby: Lobby, viewer_id: uuid.UUID | None) -> bool:
+    """Footage (and clips) of a private match: its participants only."""
+    return lobby.visibility == "public" or (viewer_id is not None and viewer_id in _participant_ids(lobby))
+
+
+def _visible_to(viewer_id: uuid.UUID | None) -> ColumnElement[bool]:
+    """SQL mirror of `_can_see` (the query must join Recording → Lobby)."""
+    if viewer_id is None:
+        return Lobby.visibility == "public"
+    participant = or_(
+        Lobby.host_id == viewer_id,
+        exists(select(LobbyMember.id).where(LobbyMember.lobby_id == Lobby.id, LobbyMember.user_id == viewer_id,
+                                            LobbyMember.status == "paid")),
+    )
+    return or_(Lobby.visibility == "public", participant)
+
+
+def _clips_of_visible_lobbies(viewer_id: uuid.UUID | None):
+    return (
+        select(Clip)
+        .join(Recording, Recording.id == Clip.recording_id)
+        .join(Lobby, Lobby.id == Recording.lobby_id)
+        .where(_visible_to(viewer_id))
+    )
 
 
 async def _liked_ids(db: AsyncSession, viewer_id: uuid.UUID | None, clip_ids: Sequence[uuid.UUID]) -> set[uuid.UUID]:
@@ -200,7 +231,9 @@ async def recording_summary_for_lobby(db: AsyncSession, lobby_id: uuid.UUID) -> 
 async def pinned_clips_for_user(db: AsyncSession, user_id: uuid.UUID, viewer_id: uuid.UUID | None) -> list[ClipOut]:
     clips = (
         await db.scalars(
-            select(Clip).where(Clip.user_id == user_id, Clip.is_pinned.is_(True)).order_by(Clip.created_at.desc())
+            _clips_of_visible_lobbies(viewer_id)
+            .where(Clip.user_id == user_id, Clip.is_pinned.is_(True))
+            .order_by(Clip.created_at.desc())
         )
     ).unique().all()
     return await clip_outs(db, clips, viewer_id)
@@ -281,20 +314,28 @@ async def create_clip(db: AsyncSession, recording_id: uuid.UUID, user: User, bod
     clip.recording = recording
     clip.user = user
     db.add(clip)
-    await award_xp(db, user.id, XP.CLIP_CREATED, f"Clipped “{clip.title}”", clip.id)
+    # XP once per recording per player — deleting and re-creating clips earns nothing more
+    await get_stats_for_update(db, user.id)  # per-user mutex so parallel creates can't both pass the check
+    already = await db.scalar(
+        select(XpEvent.id).where(XpEvent.user_id == user.id, XpEvent.ref_id == recording.id,
+                                 XpEvent.reason.startswith(CLIP_XP_PREFIX)).limit(1)
+    )
+    if already is None:
+        await award_xp(db, user.id, XP.CLIP_CREATED, f"{CLIP_XP_PREFIX} “{clip.title}”"[:80], recording.id)
     await db.commit()
     return _clip_out(clip, set())
 
 
-async def _get_clip(db: AsyncSession, clip_id: uuid.UUID) -> Clip:
+async def _get_clip(db: AsyncSession, clip_id: uuid.UUID, viewer: User | None = None) -> Clip:
+    """Load a clip; with `viewer`, a private match's clip is 404 for anyone but its participants."""
     clip = await db.get(Clip, clip_id)
-    if clip is None:
+    if clip is None or (viewer is not None and not _can_see(clip.recording.lobby, viewer.id)):
         raise NotFound("Clip not found")
     return clip
 
 
 async def delete_clip(db: AsyncSession, clip_id: uuid.UUID, user: User) -> None:
-    clip = await _get_clip(db, clip_id)
+    clip = await _get_clip(db, clip_id, user)
     if clip.user_id != user.id:
         raise Forbidden("You can only delete your own clips")
     await db.delete(clip)
@@ -310,11 +351,12 @@ async def feed(
     limit: int,
     offset: int,
 ) -> Page[ClipOut]:
+    """Public highlights feed — clips from public matches only (private footage stays with its players)."""
     base = (
         select(Clip)
         .join(Recording, Recording.id == Clip.recording_id)
         .join(Lobby, Lobby.id == Recording.lobby_id)
-        .where(Recording.status == "ready")
+        .where(Recording.status == "ready", Lobby.visibility == "public")
     )
     if sport:
         base = base.where(Lobby.sport == sport)
@@ -330,9 +372,12 @@ async def feed(
 
 
 async def user_clips(db: AsyncSession, user_id: uuid.UUID, viewer: User) -> list[ClipOut]:
+    """A player's clips — private-match clips only for that match's participants."""
     clips = (
         await db.scalars(
-            select(Clip).where(Clip.user_id == user_id).order_by(Clip.is_pinned.desc(), Clip.created_at.desc())
+            _clips_of_visible_lobbies(viewer.id)
+            .where(Clip.user_id == user_id)
+            .order_by(Clip.is_pinned.desc(), Clip.created_at.desc())
         )
     ).unique().all()
     return await clip_outs(db, clips, viewer.id)
@@ -346,7 +391,7 @@ async def _reload_clip_out(db: AsyncSession, clip_id: uuid.UUID, viewer_id: uuid
 
 
 async def like(db: AsyncSession, clip_id: uuid.UUID, user: User) -> ClipOut:
-    await _get_clip(db, clip_id)
+    await _get_clip(db, clip_id, user)
     inserted = await db.scalar(
         insert(ClipLike)
         .values(clip_id=clip_id, user_id=user.id, created_at=utcnow())
@@ -360,7 +405,7 @@ async def like(db: AsyncSession, clip_id: uuid.UUID, user: User) -> ClipOut:
 
 
 async def unlike(db: AsyncSession, clip_id: uuid.UUID, user: User) -> ClipOut:
-    await _get_clip(db, clip_id)
+    await _get_clip(db, clip_id, user)
     removed = await db.scalar(
         delete(ClipLike).where(ClipLike.clip_id == clip_id, ClipLike.user_id == user.id).returning(ClipLike.clip_id)
     )
@@ -373,7 +418,7 @@ async def unlike(db: AsyncSession, clip_id: uuid.UUID, user: User) -> ClipOut:
 
 
 async def set_pinned(db: AsyncSession, clip_id: uuid.UUID, user: User, pinned: bool) -> ClipOut:
-    clip = await _get_clip(db, clip_id)
+    clip = await _get_clip(db, clip_id, user)
     if clip.user_id != user.id:
         raise Forbidden("You can only pin your own clips")
     if clip.is_pinned != pinned:
@@ -392,7 +437,14 @@ async def set_pinned(db: AsyncSession, clip_id: uuid.UUID, user: User, pinned: b
     return (await clip_outs(db, [clip], user.id))[0]
 
 
-async def add_view(db: AsyncSession, clip_id: uuid.UUID) -> int:
+async def add_view(db: AsyncSession, clip_id: uuid.UUID, viewer: User) -> int:
+    """Count a view: once per viewer per clip per VIEW_DEDUP_SECONDS, never the owner's own views."""
+    clip = await _get_clip(db, clip_id, viewer)
+    if clip.user_id == viewer.id:
+        return int(clip.views)
+    fresh = await get_redis().set(f"{VIEW_KEY_PREFIX}{clip.id}:{viewer.id}", "1", nx=True, ex=VIEW_DEDUP_SECONDS)
+    if not fresh:
+        return int(clip.views)
     views = await db.scalar(update(Clip).where(Clip.id == clip_id).values(views=Clip.views + 1).returning(Clip.views))
     if views is None:
         raise NotFound("Clip not found")

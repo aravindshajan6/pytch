@@ -34,5 +34,9 @@ class Slot(TimestampMixin, Base):
     booking_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("bookings.id", ondelete="SET NULL", use_alter=True)
     )
+    # non-Pytch occupation (walk-in / other app / maintenance / iCal / channel API); status="blocked"
+    block_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("slot_blocks.id", ondelete="SET NULL", use_alter=True), index=True
+    )
 
     pitch = relationship("Pitch", lazy="joined")

@@ -24,10 +24,11 @@ import { celebrate } from '@/lib/celebrate'
 import { cn } from '@/lib/cn'
 import { formatWhen } from '@/lib/format'
 import { useRealtimeEvent } from '@/lib/realtime'
-import { SPORT_LIST, SPORTS } from '@/lib/sports'
+import { SPORT_LIST, sportInfo } from '@/lib/sports'
 import type { LobbyDetail, SOSRequest, Sport } from '@/types/api'
 import {
   type BenchSettings,
+  nearbyRadiusKm,
   useBenchCenter,
   useBenchDefaults,
   useBenchNearby,
@@ -203,7 +204,8 @@ export default function BenchPage() {
       title: `Sub in: ${lobby.title}`,
       subtitle: `${lobby.turf.name} · ${formatWhen(lobby.start_at)} · seat held 5 min`,
       amountPaise: lobby.my_membership?.share_paise ?? sos.discounted_share_paise,
-      createIntent: (useCredits) => api.lobbies.pay(lobby.id, useCredits),
+      lobbyId: lobby.id,
+      createIntent: (useCredits, couponCode) => api.lobbies.pay(lobby.id, useCredits, couponCode),
       onSuccess: () => {
         celebrate()
         toast.success('Hero Sub! 🦸', { description: `You saved ${lobby.title}. +150 XP incoming.` })
@@ -259,7 +261,7 @@ export default function BenchPage() {
   }, [sosQ.data, reservations])
 
   const count = nearby.data?.count ?? 0
-  const sportLabel = sports.length === SPORT_LIST.length ? 'all sports' : sports.map((s) => SPORTS[s].label).join(', ')
+  const sportLabel = sports.length === SPORT_LIST.length ? 'all sports' : sports.map((s) => sportInfo(s).label).join(', ')
 
   // ───────── render ─────────
 
@@ -299,7 +301,7 @@ export default function BenchPage() {
               <Radar
                 className="mx-auto max-w-[380px]"
                 center={center}
-                radiusKm={radius}
+                radiusKm={nearbyRadiusKm(radius)}
                 blips={nearby.data?.blips ?? []}
                 active={active}
               >
@@ -311,11 +313,14 @@ export default function BenchPage() {
             <div className="mt-5 flex items-end justify-between gap-4">
               <div>
                 <div className="flex items-baseline gap-2">
-                  <AnimatedNumber value={count} className={cn('font-display text-5xl font-bold', active ? 'text-volt' : 'text-fg')} />
+                  <span className={cn('font-display text-5xl font-bold', active ? 'text-volt' : 'text-fg')}>
+                    <AnimatedNumber value={count} />
+                    {count >= 4 && '+'}
+                  </span>
                   <span className="text-sm text-muted">{count === 1 ? 'player' : 'players'}</span>
                 </div>
                 <p className="mt-1 text-sm text-muted">
-                  on the bench within <span className="font-semibold text-fg">{radius} km</span> · {sportLabel}
+                  on the bench within <span className="font-semibold text-fg">{nearbyRadiusKm(radius)} km</span> · {sportLabel}
                 </p>
               </div>
               {nearby.isFetching && <Loader2 className="mb-1 h-4 w-4 animate-spin text-subtle" aria-label="Refreshing" />}
@@ -420,7 +425,7 @@ export default function BenchPage() {
               <div className="flex flex-wrap gap-2">
                 {SPORT_LIST.map((sp) => (
                   <FilterChip key={sp} active={sports.includes(sp)} onClick={() => toggleSport(sp)} aria-pressed={sports.includes(sp)}>
-                    <span>{SPORTS[sp].emoji}</span> {SPORTS[sp].label}
+                    <span>{sportInfo(sp).emoji}</span> {sportInfo(sp).label}
                   </FilterChip>
                 ))}
               </div>

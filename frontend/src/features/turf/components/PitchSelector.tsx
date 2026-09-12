@@ -2,7 +2,7 @@ import { Home, Sun, Users, Video } from 'lucide-react'
 import { motion } from 'motion/react'
 import { cn } from '@/lib/cn'
 import { formatINR } from '@/lib/format'
-import { SPORTS } from '@/lib/sports'
+import { sportInfo } from '@/lib/sports'
 import type { Pitch } from '@/types/api'
 import { alpha } from '@/lib/color'
 
@@ -12,7 +12,7 @@ export function PitchSelector({ pitches, value, onChange }: { pitches: Pitch[]; 
     <div role="radiogroup" aria-label="Choose a pitch" className="no-scrollbar -mx-4 flex snap-x scroll-px-4 gap-3 overflow-x-auto px-4 py-1 sm:mx-0 sm:scroll-px-0 sm:px-0">
       {pitches.map((p) => {
         const active = p.id === value
-        const s = SPORTS[p.sport]
+        const s = sportInfo(p.sport)
         return (
           <motion.button
             key={p.id}

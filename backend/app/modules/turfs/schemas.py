@@ -38,6 +38,7 @@ class TurfSummary(Schema):
     rating_count: int
     distance_km: float | None
     open_lobbies_count: int
+    is_featured: bool = False  # "Feature on Discover" (admin console) — featured venues rank first by default
 
 
 class PitchOut(Schema):

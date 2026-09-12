@@ -1,0 +1,153 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   Partner portal tokens (loaded with the lazily-mounted PartnerApp chunk).
+   Plain custom properties — used from TS as `var(--src-walk_in)` or resolved with cssVar() for recharts.
+
+   --src-*  booking-source identity on the calendar (always paired with a text label + icon).
+   --viz-*  categorical chart slots, validated with the dataviz validator
+            (dark: surface #0c1210, light: surface #fbfcfa — all six checks pass on the 5 hue slots;
+             slot 6 is the neutral "other / blocked" fold).
+   ───────────────────────────────────────────────────────────────────────────── */
+:root,
+[data-theme='dark'] {
+  --src-pytch: #c8ff2e;
+  --src-walk_in: #3dd9ff;
+  --src-phone: #a78bfa;
+  --src-playo: #ff8f4d;
+  --src-hudle: #ff7ac6;
+  --src-khelomore: #ffd24d;
+  --src-other_app: #2ee59d;
+  --src-ical: #6b8cff;
+  --src-api: #9aa4ff;
+  --src-maintenance: #8a9a94;
+
+  --viz-1: #7aa300;
+  --viz-2: #149fc4;
+  --viz-3: #8b6cf0;
+  --viz-4: #e0692a;
+  --viz-5: #4d7cf2;
+  --viz-6: #8a948f;
+  --viz-surface: #0c1210;
+  --viz-grid: #1c2622;
+  --viz-axis: #6b7a74;
+  --heat-hi: #c8ff2e;
+
+  --cal-line: rgb(255 255 255 / 0.06);
+  --cal-hour: rgb(255 255 255 / 0.1);
+  --cal-past: rgb(0 0 0 / 0.28);
+  --hatch: rgb(255 255 255 / 0.09);
+}
+
+[data-theme='light'] {
+  --src-pytch: #3f7d00;
+  --src-walk_in: #0284c7;
+  --src-phone: #6d28d9;
+  --src-playo: #c2410c;
+  --src-hudle: #be185d;
+  --src-khelomore: #a16207;
+  --src-other_app: #047857;
+  --src-ical: #2f5fe0;
+  --src-api: #4f46e5;
+  --src-maintenance: #6b7a73;
+
+  --viz-1: #3f7d00;
+  --viz-2: #0284c7;
+  --viz-3: #6d28d9;
+  --viz-4: #c2410c;
+  --viz-5: #2f5fe0;
+  --viz-6: #7a8981;
+  --viz-surface: #fbfcfa;
+  --viz-grid: #e4e9e2;
+  --viz-axis: #6f7e76;
+  --heat-hi: #2d5a00;
+
+  --cal-line: rgb(14 42 26 / 0.07);
+  --cal-hour: rgb(14 42 26 / 0.12);
+  --cal-past: rgb(14 42 26 / 0.035);
+  --hatch: rgb(14 42 26 / 0.1);
+}
+
+/* Maintenance / blocked: diagonal hatch (texture = the non-colour channel). */
+.pp-hatch {
+  background-image: repeating-linear-gradient(135deg, var(--hatch) 0 6px, transparent 6px 12px);
+}
+
+/* A held (someone-is-checking-out) cell breathes amber. */
+@keyframes pp-held {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-sun) 45%, transparent);
+    background-color: color-mix(in srgb, var(--color-sun) 8%, transparent);
+  }
+  50% {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-sun) 85%, transparent);
+    background-color: color-mix(in srgb, var(--color-sun) 18%, transparent);
+  }
+}
+.pp-held {
+  animation: pp-held 1.8s ease-in-out infinite;
+}
+
+/* Selected-range marching border for the quick-block selection. */
+@keyframes pp-march {
+  to {
+    background-position: 16px 0, -16px 100%, 0 -16px, 100% 16px;
+  }
+}
+.pp-selected {
+  background-image:
+    linear-gradient(90deg, var(--color-volt) 50%, transparent 50%),
+    linear-gradient(90deg, var(--color-volt) 50%, transparent 50%),
+    linear-gradient(0deg, var(--color-volt) 50%, transparent 50%),
+    linear-gradient(0deg, var(--color-volt) 50%, transparent 50%);
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  background-size: 8px 2px, 8px 2px, 2px 8px, 2px 8px;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  animation: pp-march 0.8s linear infinite;
+}
+
+/* recharts: kill the default focus outline on the svg wrapper (we draw our own hover state). */
+.pp-chart .recharts-wrapper,
+.pp-chart .recharts-surface {
+  outline: none;
+}
+
+/* Segmented tabs (shared <Segmented size="sm">): 36px visual height, ≥44px touch target through an invisible
+   hit area that reaches into the control's own 4px padding. Add `pp-seg` to the Segmented's className. */
+.pp-seg [role='radio'] {
+  min-height: 2.25rem;
+}
+.pp-seg [role='radio']::before {
+  content: '';
+  position: absolute;
+  inset: -4px 0;
+}
+
+/* Horizontal scrollers with more content off-screen: a fade on the edge that has more (set by JS via data-more). */
+.pp-scroll-cue {
+  --cue: var(--color-ink-800);
+  position: relative;
+}
+.pp-scroll-cue::before,
+.pp-scroll-cue::after {
+  content: '';
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2rem;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.pp-scroll-cue::before {
+  left: 0;
+  background: linear-gradient(90deg, var(--cue), transparent);
+}
+.pp-scroll-cue::after {
+  right: 0;
+  background: linear-gradient(270deg, var(--cue), transparent);
+}
+.pp-scroll-cue[data-more~='left']::before,
+.pp-scroll-cue[data-more~='right']::after {
+  opacity: 0.9;
+}

@@ -7,7 +7,7 @@ import { Countdown } from '@/components/ui/Countdown'
 import { Switch } from '@/components/ui/Form'
 import { errorMessage } from '@/lib/api/client'
 import { cn } from '@/lib/cn'
-import { useBenchCenter, useBenchDefaults, useBenchNearby, useBenchStatus, useBenchToggle } from '../api'
+import { nearbyRadiusKm, useBenchCenter, useBenchDefaults, useBenchNearby, useBenchStatus, useBenchToggle } from '../api'
 import { Radar } from './Radar'
 
 /** Compact Live Bench card for the Home page: mini radar + go-live switch + nearby count. */
@@ -42,7 +42,7 @@ export function BenchQuickToggle({ className }: { className?: string }) {
     >
       {active && <div aria-hidden className="pointer-events-none absolute -top-16 -left-10 h-40 w-40 rounded-full bg-volt/15 blur-3xl" />}
       <Link to="/app/bench" aria-label="Open Live Bench" className="relative w-20 shrink-0 sm:w-24">
-        <Radar size="sm" center={center} radiusKm={defaults.radius_km} blips={nearby.data?.blips ?? []} active={active} />
+        <Radar size="sm" center={center} radiusKm={nearbyRadiusKm(defaults.radius_km)} blips={nearby.data?.blips ?? []} active={active} />
       </Link>
       <div className="relative min-w-0 flex-1">
         <div className="flex items-center gap-2 text-[11px] font-bold tracking-[0.18em] uppercase">
@@ -70,7 +70,8 @@ export function BenchQuickToggle({ className }: { className?: string }) {
                 </span>
               ) : (
                 <span>
-                  <AnimatedNumber value={count} className="font-semibold text-fg" /> on the bench within {defaults.radius_km} km
+                  <AnimatedNumber value={count} className="font-semibold text-fg" />
+                  {count >= 4 && <span className="font-semibold text-fg">+</span>} on the bench within {nearbyRadiusKm(defaults.radius_km)} km
                 </span>
               )}
             </div>

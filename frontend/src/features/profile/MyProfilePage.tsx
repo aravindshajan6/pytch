@@ -1,7 +1,5 @@
-import { useQueryClient } from '@tanstack/react-query'
 import { CalendarDays, Film, LogOut, MapPin, Palette, Pencil, ShieldCheck, Sparkles } from 'lucide-react'
 import { motion } from 'motion/react'
-import { useNavigate } from 'react-router'
 import { Button, LinkButton } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { TierBadge, VerifiedBadge } from '@/components/ui/PlayerBits'
@@ -9,7 +7,7 @@ import { EmptyState, ErrorState, Skeleton, Stat } from '@/components/ui/States'
 import { ThemeSelector } from '@/components/ui/ThemeToggle'
 import { ClipCard } from '@/features/highlights/components/ClipCard'
 import { formatDateLong } from '@/lib/format'
-import { useAuth } from '@/stores/auth'
+import { useLogout } from '@/features/auth/useLogout'
 import { useGamification, useMyProfile, useRatingSummary } from './api'
 import { BadgesGrid } from './components/BadgesGrid'
 import { CardHero } from './components/CardHero'
@@ -25,18 +23,10 @@ const fade = {
 }
 
 export default function MyProfilePage() {
-  const qc = useQueryClient()
-  const navigate = useNavigate()
-  const logout = useAuth((s) => s.logout)
+  const { logout, pending: loggingOut } = useLogout('/')
   const profile = useMyProfile()
   const game = useGamification()
   const ratings = useRatingSummary()
-
-  const onLogout = () => {
-    logout()
-    qc.clear()
-    navigate('/')
-  }
 
   if (profile.isLoading)
     return (
@@ -81,8 +71,8 @@ export default function MyProfilePage() {
             <LinkButton to="/app/profile/edit" variant="secondary">
               <Pencil className="h-4 w-4" /> Edit profile
             </LinkButton>
-            <Button variant="ghost" onClick={onLogout}>
-              <LogOut className="h-4 w-4" /> Log out
+            <Button variant="ghost" onClick={logout} loading={loggingOut}>
+              {!loggingOut && <LogOut className="h-4 w-4" />} {loggingOut ? 'Logging out…' : 'Log out'}
             </Button>
           </div>
           <div className="mx-auto mt-5 w-full max-w-[320px] rounded-2xl bg-white/4 p-3 text-left ring-1 ring-white/8">

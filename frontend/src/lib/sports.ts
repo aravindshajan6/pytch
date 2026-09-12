@@ -10,6 +10,24 @@ export const SPORTS: Record<Sport, { label: string; emoji: string; color: string
 
 export const SPORT_LIST = Object.keys(SPORTS) as Sport[]
 
+export interface SportInfo {
+  key: Sport
+  label: string
+  emoji: string
+  color: string
+}
+
+/** Safe lookup: sports added in the admin catalog after this build still render (meta label/emoji, volt accent). */
+export function sportInfo(key: string, meta?: { label?: string; emoji?: string }): SportInfo {
+  const known = SPORTS[key as Sport]
+  return {
+    key: key as Sport,
+    label: meta?.label || known?.label || key.charAt(0).toUpperCase() + key.slice(1),
+    emoji: meta?.emoji || known?.emoji || '🏅',
+    color: known?.color ?? 'var(--color-volt)',
+  }
+}
+
 export const TIERS: Record<Tier, { label: string; color: string; ring: string }> = {
   rookie: { label: 'Rookie', color: 'var(--color-muted)', ring: 'ring-white/15' },
   regular: { label: 'Regular', color: 'var(--color-electric)', ring: 'ring-electric/60' },

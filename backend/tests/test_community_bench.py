@@ -109,7 +109,7 @@ async def test_nearby_counts_fuzzes_and_excludes_self(client, db, make_user):
     assert len(data["blips"]) == 3
     for blip in data["blips"]:
         nearest = min(haversine_km(blip["lat"], blip["lng"], la, ln) for la, ln in real)
-        assert 0.0 < nearest <= 0.45  # ±300 m per axis, never exact
+        assert 0.0 < nearest <= 1.6  # somewhere in the bencher's ~1.1 km grid cell, never exact
         assert (blip["lat"], blip["lng"]) not in real
 
     everyone = (await client.get(f"{API}/bench/nearby", params={"lat": KOCHI[0], "lng": KOCHI[1]},

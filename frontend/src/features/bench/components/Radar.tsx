@@ -37,8 +37,8 @@ function toPositions(center: { lat: number; lng: number }, radiusKm: number, bli
 }
 
 /**
- * Live Bench radar: concentric rings, a rotating conic sweep and fuzzed player
- * blips that ping as the sweep passes over them. One rAF loop drives the sweep
+ * Live Bench radar: concentric rings, a rotating conic sweep and approximate player
+ * blips (server-snapped to ~1 km cells — never exact spots) that ping as the sweep passes over them. One rAF loop drives the sweep
  * (transform only) and fires animejs pings on crossing — no per-frame React work.
  */
 export function Radar({ center, radiusKm, blips, active, size = 'lg', className, children }: RadarProps) {
@@ -124,7 +124,7 @@ export function Radar({ center, radiusKm, blips, active, size = 'lg', className,
       ref={rootRef}
       className={cn('relative aspect-square w-full select-none', className)}
       role="img"
-      aria-label={`Radar showing ${blips.length} players on the bench within ${radiusKm} km`}
+      aria-label={`Radar: approximate spots of players on the bench within ${radiusKm} km`}
     >
       {/* disc */}
       <div

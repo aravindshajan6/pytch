@@ -16,6 +16,7 @@ import type {
   CreateBookingResponse,
   CreateClipRequest,
   CreateSOSRequest,
+  CouponValidation,
   GamificationMe,
   HourWeather,
   ISODate,
@@ -85,6 +86,13 @@ export const api = {
     requestOtp: (phone: string) => http.post<OtpRequestResponse>('/auth/otp/request', { phone }, { auth: false }),
     verifyOtp: (phone: string, code: string) =>
       http.post<AuthTokens>('/auth/otp/verify', { phone, code }, { auth: false }),
+    /**
+     * Revoke the session behind `accessToken` (its access + refresh tokens die server-side).
+     * Sent with an explicit token and `auth: false` so a 401 never triggers a refresh — that would
+     * mint a fresh session in the middle of logging out.
+     */
+    logout: (accessToken: string) =>
+      http.post<{ ok: boolean }>('/auth/logout', {}, { auth: false, headers: { Authorization: `Bearer ${accessToken}` } }),
   },
 
   users: {
@@ -113,9 +121,11 @@ export const api = {
     mine: (scope: 'upcoming' | 'past') => http.get<LobbySummary[]>('/lobbies/mine', { scope }),
     get: (id: UUID) => http.get<LobbyDetail>(`/lobbies/${id}`),
     byCode: (code: string) => http.get<LobbyDetail>(`/lobbies/code/${code.toUpperCase()}`),
-    join: (id: UUID) => http.post<LobbyDetail>(`/lobbies/${id}/join`),
+    /** `code`: the invite code — private lobbies need it (or a prior `byCode` lookup). */
+    join: (id: UUID, code?: string) => http.post<LobbyDetail>(`/lobbies/${id}/join`, undefined, { query: { code: code?.toUpperCase() } }),
     leave: (id: UUID) => http.post<LobbyDetail>(`/lobbies/${id}/leave`),
-    pay: (id: UUID, use_credits: boolean) => http.post<PaymentIntent>(`/lobbies/${id}/pay`, { use_credits }),
+    pay: (id: UUID, use_credits: boolean, coupon_code?: string | null) =>
+      http.post<PaymentIntent>(`/lobbies/${id}/pay`, { use_credits, coupon_code: coupon_code || null }),
     coverRemaining: (id: UUID, use_credits: boolean) =>
       http.post<PaymentIntent>(`/lobbies/${id}/cover-remaining`, { use_credits }),
     balanceTeams: (id: UUID) => http.post<LobbyDetail>(`/lobbies/${id}/balance-teams`),
@@ -129,6 +139,13 @@ export const api = {
     mockComplete: (id: UUID, outcome: MockCompleteRequest['outcome']) =>
       http.post<Payment>(`/payments/${id}/mock/complete`, { outcome }),
     verify: (id: UUID, body: RazorpayVerifyRequest) => http.post<Payment>(`/payments/${id}/verify`, body),
+    /** Checkout abandoned: cancel a `created` intent → its credits + coupon use come straight back. Idempotent. */
+    cancel: (id: UUID) => http.post<Payment>(`/payments/${id}/cancel`),
+  },
+
+  coupons: {
+    validate: (code: string, lobby_id: UUID) =>
+      http.post<CouponValidation>('/coupons/validate', { code: code.trim().toUpperCase(), lobby_id }),
   },
 
   wallet: {

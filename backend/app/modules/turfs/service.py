@@ -16,10 +16,12 @@ from app.core.pagination import Page
 from app.core.timeutils import utcnow
 from app.modules.lobbies.models import Lobby
 from app.modules.lobbies.queries import joinable_filters
+from app.modules.turfs.availability import active_sport_keys, venue_open_clause
 from app.modules.turfs.models import Pitch, Turf
 from app.modules.turfs.schemas import PitchOut, TurfDetail, TurfSummary
 
-TurfSort = Literal["distance", "price", "rating"]
+# "featured": featured venues first, then nearest (or best rated without a location) — the Discover default
+TurfSort = Literal["featured", "distance", "price", "rating"]
 _SPORT_ORDER = {s["key"]: i for i, s in enumerate(SPORTS)}
 
 
@@ -27,8 +29,9 @@ def pitch_out(pitch: Pitch) -> PitchOut:
     return PitchOut.model_validate(pitch)
 
 
-def _active_pitches(turf: Turf) -> list[Pitch]:
-    return [p for p in turf.pitches if p.is_active]
+def _active_pitches(turf: Turf, sports: set[str] | None = None) -> list[Pitch]:
+    """Active pitches; with `sports`, only those whose sport is enabled in the catalog (public views)."""
+    return [p for p in turf.pitches if p.is_active and (sports is None or p.sport in sports)]
 
 
 def _distance(turf: Turf, lat: float | None, lng: float | None) -> float | None:
@@ -49,8 +52,10 @@ async def open_lobby_counts(db: AsyncSession, turf_ids: Sequence[uuid.UUID]) -> 
     return {turf_id: count for turf_id, count in rows.all()}
 
 
-def _summary(turf: Turf, *, open_count: int, lat: float | None, lng: float | None) -> TurfSummary:
-    pitches = _active_pitches(turf)
+def _summary(
+    turf: Turf, *, open_count: int, lat: float | None, lng: float | None, sports: set[str] | None = None
+) -> TurfSummary:
+    pitches = _active_pitches(turf, sports)
     sports = sorted({p.sport for p in pitches}, key=lambda s: _SPORT_ORDER.get(s, 99))
     return TurfSummary(
         id=turf.id,
@@ -71,6 +76,7 @@ def _summary(turf: Turf, *, open_count: int, lat: float | None, lng: float | Non
         rating_count=turf.rating_count or 0,
         distance_km=_distance(turf, lat, lng),
         open_lobbies_count=open_count,
+        is_featured=bool(turf.is_featured),
     )
 
 
@@ -94,11 +100,14 @@ async def _ensure_pitches(db: AsyncSession, turfs: Sequence[Turf]) -> None:
 
 
 async def turf_summaries(
-    db: AsyncSession, turfs: Sequence[Turf], *, lat: float | None = None, lng: float | None = None
+    db: AsyncSession, turfs: Sequence[Turf], *, lat: float | None = None, lng: float | None = None,
+    public: bool = True,
 ) -> list[TurfSummary]:
+    """`public`: hide pitches of sports disabled in the catalog (the partner portal still sees them)."""
     await _ensure_pitches(db, turfs)
     counts = await open_lobby_counts(db, [t.id for t in turfs])
-    return [_summary(t, open_count=counts.get(t.id, 0), lat=lat, lng=lng) for t in turfs]
+    sports = await active_sport_keys() if public else None
+    return [_summary(t, open_count=counts.get(t.id, 0), lat=lat, lng=lng, sports=sports) for t in turfs]
 
 
 async def turf_summary(
@@ -126,7 +135,8 @@ async def list_turfs(
     offset: int,
 ) -> Page[TurfSummary]:
     # A venue matches when at least one active pitch satisfies every pitch-level filter.
-    pitch_conditions = [Pitch.turf_id == Turf.id, Pitch.is_active.is_(True)]
+    pitch_conditions = [Pitch.turf_id == Turf.id, Pitch.is_active.is_(True),
+                        Pitch.sport.in_(await active_sport_keys())]  # disabled sports drop out of Discover
     if sport:
         pitch_conditions.append(Pitch.sport == sport)
     if indoor is not None:
@@ -134,7 +144,7 @@ async def list_turfs(
     if has_camera:
         pitch_conditions.append(Pitch.has_camera.is_(True))
 
-    stmt = select(Turf).where(Turf.is_active.is_(True), exists(select(Pitch.id).where(*pitch_conditions)))
+    stmt = select(Turf).where(venue_open_clause(), exists(select(Pitch.id).where(*pitch_conditions)))
     if q and q.strip():
         like = f"%{_escape_like(q.strip())}%"
         stmt = stmt.where(
@@ -157,10 +167,14 @@ async def list_turfs(
     )
     if sort == "price":
         order = [min_price.asc(), Turf.rating_avg.desc()]
+    elif sort == "featured" and distance is not None:
+        order = [Turf.is_featured.desc(), distance.asc()]
     elif sort == "distance" and distance is not None:
         order = [distance.asc()]
-    else:  # rating, or distance requested without a location
+    elif sort == "rating":
         order = [Turf.rating_avg.desc(), Turf.rating_count.desc()]
+    else:  # the default ordering without a location: featured venues first, then best rated
+        order = [Turf.is_featured.desc(), Turf.rating_avg.desc(), Turf.rating_count.desc()]
     stmt = stmt.order_by(*order, Turf.name, Turf.id).limit(limit).offset(offset)
 
     turfs = (await db.execute(stmt)).unique().scalars().all()
@@ -169,7 +183,7 @@ async def list_turfs(
 
 
 async def get_turf_by_slug(db: AsyncSession, slug: str) -> Turf:
-    turf = (await db.execute(select(Turf).where(Turf.slug == slug, Turf.is_active.is_(True)))).unique().scalar()
+    turf = (await db.execute(select(Turf).where(Turf.slug == slug, venue_open_clause()))).unique().scalar()
     if turf is None:
         raise NotFound("Turf not found")
     return turf
@@ -187,5 +201,5 @@ async def turf_detail(
         phone=turf.phone,
         open_time=turf.open_time.strftime("%H:%M"),
         close_time=turf.close_time.strftime("%H:%M"),
-        pitches=[pitch_out(p) for p in _active_pitches(turf)],
+        pitches=[pitch_out(p) for p in _active_pitches(turf, await active_sport_keys())],
     )

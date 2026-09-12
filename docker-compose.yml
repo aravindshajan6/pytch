@@ -1,13 +1,21 @@
 name: pytch
 
 x-backend-env: &backend-env
-  ENVIRONMENT: ${ENVIRONMENT:-production}
+  # Local demo stack. Real deployments: ENVIRONMENT=production + DEMO_MODE=false + SEED_ON_START=false
+  # (production refuses to start with DEMO_MODE=true or default secrets; the seed refuses to run there).
+  ENVIRONMENT: ${ENVIRONMENT:-development}
   DEMO_MODE: ${DEMO_MODE:-true}
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pytch}:${POSTGRES_PASSWORD:-pytch}@db:5432/${POSTGRES_DB:-pytch}
   REDIS_URL: redis://redis:6379/0
   JWT_SECRET: ${JWT_SECRET:-change-me-in-production-please-32b}
+  ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-change-me-admin-secret-must-differ-from-jwt-secret}
+  API_KEY_PEPPER: ${API_KEY_PEPPER:-change-me-api-key-pepper}
+  DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:-}
+  ADMIN_IP_ALLOWLIST: ${ADMIN_IP_ALLOWLIST:-[]}
+  ADMIN_COOKIE_SECURE: ${ADMIN_COOKIE_SECURE:-false}
   PUBLIC_WEB_URL: ${PUBLIC_WEB_URL:-http://localhost:8080}
-  CORS_ORIGINS: '["${PUBLIC_WEB_URL:-http://localhost:8080}","http://localhost:5173"]'
+  CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:8080","http://localhost:5173"]}
+  TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-["127.0.0.0/8","10.0.0.0/8","172.16.0.0/12","192.168.0.0/16"]}
   PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-mock}
   RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
   RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
@@ -84,10 +92,14 @@ services:
       args:
         VITE_API_BASE: /api/v1
     restart: unless-stopped
+    environment:
+      ADMIN_ALLOW_CIDR: ${ADMIN_ALLOW_CIDR:-0.0.0.0/0}
     depends_on:
       api: { condition: service_healthy }
     ports:
       - "${WEB_PORT:-8080}:80"
+      # admin console: separate origin, loopback-only by default (expose via VPN / SSH tunnel)
+      - "127.0.0.1:${ADMIN_PORT:-8090}:8090"
 
 volumes:
   pgdata:

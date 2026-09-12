@@ -1,4 +1,5 @@
-fastapi==0.115.12
+fastapi==0.136.3
+starlette==1.6.0
 uvicorn[standard]==0.34.2
 pydantic==2.11.4
 pydantic-settings==2.9.1
@@ -6,7 +7,11 @@ sqlalchemy[asyncio]==2.0.41
 asyncpg==0.30.0
 alembic==1.15.2
 redis==5.2.1
-pyjwt==2.10.1
+pyjwt==2.14.0
 httpx==0.28.1
-orjson==3.10.18
-python-multipart==0.0.20
+orjson==3.12.0
+python-multipart==0.0.32
+argon2-cffi==23.1.0
+pyotp==2.9.0
+cryptography==50.0.1
+icalendar==6.1.3

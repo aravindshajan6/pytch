@@ -7,6 +7,13 @@ import { qk } from '@/lib/api/queryKeys'
 import { requestGps, useLocationStore } from '@/stores/location'
 import type { BenchStatus, BenchUpdate, Sport } from '@/types/api'
 
+/** `GET /bench/nearby` rounds the radius *up* to one of these — coarse on purpose (privacy). */
+const NEARBY_RADII_KM = [2, 5, 10, 15]
+export const nearbyRadiusKm = (km: number) => NEARBY_RADII_KM.find((r) => r >= km) ?? NEARBY_RADII_KM[NEARBY_RADII_KM.length - 1]!
+
+/** The nearby count is bucketed server-side: exact up to 3, then a floor (4 = 4–9, 10 = 10–19, 20 = 20–49, 50 = 50+). */
+export const benchCountLabel = (count: number) => (count >= 4 ? `${count}+` : String(count))
+
 export function useBenchStatus() {
   return useQuery({ queryKey: qk.bench, queryFn: api.bench.me, staleTime: 15_000 })
 }
@@ -21,15 +28,21 @@ export function useBenchCenter(status: BenchStatus | undefined) {
   return useMemo(() => ({ lat, lng }), [lat, lng])
 }
 
+/**
+ * Approximate bench headcount around `center`. Blips are grid-snapped (~1 km cells), not real positions.
+ * Errors (incl. 429 rate limits) stay quiet: the last good answer keeps showing.
+ */
 export function useBenchNearby(center: { lat: number; lng: number }, radiusKm: number, sport?: Sport) {
   // Round so tiny GPS jitter doesn't create new cache entries.
   const lat = Math.round(center.lat * 1000) / 1000
   const lng = Math.round(center.lng * 1000) / 1000
+  const radius = nearbyRadiusKm(radiusKm) // same answer for every radius in a bucket → share the cache entry
   return useQuery({
-    queryKey: [...qk.benchNearby(lat, lng, sport), radiusKm],
-    queryFn: () => api.bench.nearby({ lat, lng, sport, radius_km: radiusKm }),
+    queryKey: [...qk.benchNearby(lat, lng, sport), radius],
+    queryFn: () => api.bench.nearby({ lat, lng, sport, radius_km: radius }),
     refetchInterval: 20_000,
     placeholderData: (prev) => prev,
+    retry: false,
   })
 }
 

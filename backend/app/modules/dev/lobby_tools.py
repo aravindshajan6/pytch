@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import AREAS
 from app.core.database import SessionLocal
 from app.core.deps import DB, CurrentUser
-from app.core.errors import AppError, Conflict
+from app.core.errors import AppError, Conflict, NotFound
 from app.core.logging import logger
 from app.core.timeutils import utcnow
 from app.modules.lobbies import service as lobbies
@@ -99,7 +99,7 @@ async def _bot_join_and_pay(lobby_id: uuid.UUID, bot_id: uuid.UUID) -> bool:
     async with SessionLocal() as db:
         bot = await db.get(User, bot_id)
         try:
-            await lobbies.join_lobby(db, lobby_id, bot)  # type: ignore[arg-type]
+            await lobbies.join_lobby(db, lobby_id, bot, invited=True)  # type: ignore[arg-type]  # host asked
         except (LobbyFull, LobbyClosed):
             return False
         except AppError as exc:
@@ -130,10 +130,18 @@ async def fill_worker(lobby_id: uuid.UUID, bot_ids: list[uuid.UUID]) -> None:
             logger.exception("dev fill: bot %s crashed", bot_id)
 
 
+async def _hosted_lobby(db: AsyncSession, lobby_id: uuid.UUID, user: User) -> Lobby:
+    """Demo tools act on the caller's own match only (a stranger gets the same 404 as a missing match)."""
+    lobby = await lobbies.get_lobby(db, lobby_id)
+    if lobby.host_id != user.id:
+        raise NotFound("Match not found")
+    return lobby
+
+
 @router.post("/lobbies/{lobby_id}/fill")
 async def fill(lobby_id: uuid.UUID, user: CurrentUser, db: DB) -> dict:
-    """Bots join and pay one by one (~1.5 s apart) — watch the split payment complete live."""
-    lobby = await lobbies.get_lobby(db, lobby_id)
+    """Bots join and pay one by one (~1.5 s apart) — watch the split payment complete live. Host only."""
+    lobby = await _hosted_lobby(db, lobby_id, user)
     lobbies.ensure_open_for_seats(lobby, utcnow())
     needed = lobbies.spots_left(lobby)
     if needed <= 0:
@@ -147,8 +155,8 @@ async def fill(lobby_id: uuid.UUID, user: CurrentUser, db: DB) -> dict:
 
 @router.post("/lobbies/{lobby_id}/complete", response_model=LobbyDetail)
 async def complete(lobby_id: uuid.UUID, user: CurrentUser, db: DB) -> LobbyDetail:
-    """Fast-forward: mark the match completed now and run the post-match pipeline."""
-    lobby = await lobbies.get_lobby(db, lobby_id)
+    """Fast-forward: mark the match completed now and run the post-match pipeline. Host only."""
+    lobby = await _hosted_lobby(db, lobby_id, user)
     await lobbies.complete_match(db, lobby)
     await db.commit()
     lobby = await lobbies.get_lobby(db, lobby_id, refresh=True)
@@ -157,8 +165,8 @@ async def complete(lobby_id: uuid.UUID, user: CurrentUser, db: DB) -> LobbyDetai
 
 @router.post("/lobbies/{lobby_id}/dropout", response_model=LobbyDetail)
 async def dropout(lobby_id: uuid.UUID, user: CurrentUser, db: DB) -> LobbyDetail:
-    """A random paid non-host member drops out through the real leave path (→ SOS to the bench)."""
-    lobby = await lobbies.get_lobby(db, lobby_id)
+    """A random paid non-host member drops out through the real leave path (→ SOS to the bench). Host only."""
+    lobby = await _hosted_lobby(db, lobby_id, user)
     candidates = [m for m in lobbies.active_members(lobby) if m.status == "paid" and m.role != "host"]
     if not candidates:
         raise Conflict("No paid players (other than the host) to drop out")

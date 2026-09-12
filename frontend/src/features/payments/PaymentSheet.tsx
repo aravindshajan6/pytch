@@ -1,27 +1,42 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, CreditCard, Landmark, ShieldCheck, Smartphone, Wallet, X } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/Button'
 import { Switch } from '@/components/ui/Form'
 import { Sheet } from '@/components/ui/Sheet'
 import { useMe } from '@/hooks/useMe'
-import { errorMessage } from '@/lib/api/client'
+import { errorMessage, isApiError } from '@/lib/api/client'
 import { api } from '@/lib/api/endpoints'
 import { qk } from '@/lib/api/queryKeys'
 import { pop } from '@/lib/celebrate'
 import { cn } from '@/lib/cn'
 import { formatINR } from '@/lib/format'
 import { cssVar } from '@/stores/theme'
-import type { PaymentIntent } from '@/types/api'
+import type { CouponValidation, PaymentIntent } from '@/types/api'
+import { PromoCode, Row } from './PaymentParts'
 
 export interface PayRequestConfig {
   title: string
   subtitle?: string
   amountPaise: number
-  /** Called after the user reviews; must create the intent server-side. */
-  createIntent: (useCredits: boolean) => Promise<PaymentIntent>
+  /** What `amountPaise` is, e.g. "Remaining seats" (default "Your share"). */
+  amountLabel?: string
+  /**
+   * Called after the user reviews; must create the intent server-side. `useCredits` is the user's
+   * toggle as-is — the server decides how much of the balance applies.
+   */
+  createIntent: (useCredits: boolean, couponCode?: string | null) => Promise<PaymentIntent>
+  /**
+   * Lobby being paid for. Lets the sheet count credits still held by an abandoned checkout for this
+   * seat (the next attempt supersedes it and gets them back), and enables the promo-code field.
+   */
+  lobbyId?: string
+  /** Offer the promo-code field (needs `lobbyId`; default true). Coupons only discount your own seat. */
+  promo?: boolean
+  /** The payment covers more than your own seat (full-mode host pays the whole booking) → label promo savings as "1 seat". */
+  multiSeat?: boolean
   onSuccess?: (intent: PaymentIntent) => void
 }
 
@@ -53,8 +68,9 @@ function loadRazorpay(): Promise<boolean> {
 /**
  * Payment flow hook. Usage:
  *   const pay = usePayFlow()
- *   pay.start({ title, amountPaise, createIntent: (c) => api.lobbies.pay(id, c), onSuccess })
+ *   pay.start({ title, amountPaise, lobbyId, createIntent: (c) => api.lobbies.pay(id, c), onSuccess })
  *   return <>{...}{pay.sheet}</>
+ * `pay.open` is true while the sheet is up (e.g. to hold back other overlays).
  */
 export function usePayFlow() {
   const qc = useQueryClient()
@@ -65,20 +81,67 @@ export function usePayFlow() {
   const [intent, setIntent] = useState<PaymentIntent | null>(null)
   const [method, setMethod] = useState<(typeof METHODS)[number]['id']>('upi')
   const [busy, setBusy] = useState(false)
+  const [coupon, setCoupon] = useState<CouponValidation | null>(null)
 
-  const balance = user?.wallet_balance_paise ?? 0
+  // Credits are debited when an intent is created. Closing the sheet cancels the intent (credits come
+  // back), but a checkout abandoned elsewhere (Razorpay dismissed, tab closed, cancel failed) keeps them on
+  // hold until the next attempt for this seat supersedes it — the server then returns and re-applies them.
+  // So "available" here = balance + whatever is still held for this lobby.
+  const lobbyId = config?.lobbyId
+  const payments = useQuery({ queryKey: qk.payments, queryFn: api.payments.mine, enabled: !!lobbyId, staleTime: 0 })
+  const held = useMemo(
+    () =>
+      (payments.data ?? [])
+        .filter((p) => p.status === 'created' && p.lobby_id === lobbyId)
+        .reduce((sum, p) => sum + p.credits_applied_paise, 0),
+    [payments.data, lobbyId],
+  )
+  const balance = (user?.wallet_balance_paise ?? 0) + held
 
-  const start = useCallback((c: PayRequestConfig) => {
-    setConfig(c)
-    setIntent(null)
+  /** Fresh balance + held credits (another tab / an earlier attempt may have moved money). */
+  const refreshMoney = useCallback(() => {
+    qc.invalidateQueries({ queryKey: qk.me })
+    qc.invalidateQueries({ queryKey: qk.wallet })
+    qc.invalidateQueries({ queryKey: qk.payments })
+  }, [qc])
+
+  const start = useCallback(
+    (c: PayRequestConfig) => {
+      setConfig(c)
+      setIntent(null)
+      setStep('review')
+      setUseCredits(true)
+      setCoupon(null)
+      refreshMoney()
+    },
+    [refreshMoney],
+  )
+
+  const backToReview = useCallback(() => {
     setStep('review')
-    setUseCredits(true)
-  }, [])
+    refreshMoney()
+  }, [refreshMoney])
 
   const close = useCallback(() => {
     if (step === 'processing') return
+    // Walking away from an unpaid intent: cancel it so its credits / promo use come straight back (best
+    // effort — if that fails, the next attempt for this seat, or the seat/lobby closing, returns them).
+    const abandoned = intent && intent.status === 'created' && (step === 'method' || step === 'review')
+    if (abandoned) {
+      const heldPaise = intent.credits_applied_paise
+      api.payments
+        .cancel(intent.payment_id)
+        .catch(() => {
+          if (heldPaise > 0)
+            toast(`${formatINR(heldPaise)} in credits is on hold for this checkout`, {
+              description: "It's applied when you pay, or returned to your wallet automatically if you don't.",
+            })
+        })
+        .finally(refreshMoney)
+      setIntent(null)
+    }
     setConfig(null)
-  }, [step])
+  }, [step, intent, refreshMoney])
 
   const finish = useCallback(
     (i: PaymentIntent) => {
@@ -86,6 +149,7 @@ export function usePayFlow() {
       pop(0.5, 0.6)
       qc.invalidateQueries({ queryKey: qk.me })
       qc.invalidateQueries({ queryKey: qk.wallet })
+      qc.invalidateQueries({ queryKey: qk.payments })
       config?.onSuccess?.(i)
       setTimeout(() => setConfig(null), 1400)
     },
@@ -96,13 +160,19 @@ export function usePayFlow() {
     if (!config) return
     setBusy(true)
     try {
-      const i = await config.createIntent(useCredits && balance > 0)
+      // always the user's choice: with credits held by an earlier attempt, the visible balance can be 0
+      // while the server still has credits to apply (it releases the old hold first)
+      const i = await config.createIntent(useCredits, coupon?.valid ? coupon.code : null)
       setIntent(i)
       if (i.status === 'paid') return finish(i)
       if (i.provider === 'razorpay' && i.razorpay) return openRazorpay(i)
       setStep('method')
     } catch (e) {
-      toast.error(errorMessage(e))
+      if (coupon && (isApiError(e, 'COUPON_INVALID') || isApiError(e, 'COUPON_EXHAUSTED'))) {
+        // the code stopped working between preview and pay (limit hit, expired…) — drop it, keep the sheet open
+        setCoupon(null)
+        toast.error('Promo code no longer applies', { description: errorMessage(e) })
+      } else toast.error(errorMessage(e))
     } finally {
       setBusy(false)
     }
@@ -132,7 +202,7 @@ export function usePayFlow() {
           setStep('failed')
         }
       },
-      modal: { ondismiss: () => setStep('review') },
+      modal: { ondismiss: backToReview },
     })
     rzp.open()
   }
@@ -151,8 +221,10 @@ export function usePayFlow() {
     }
   }
 
-  const credits = config ? Math.min(balance, config.amountPaise) : 0
-  const payable = config ? config.amountPaise - (useCredits ? credits : 0) : 0
+  const discount = coupon?.valid ? Math.min(coupon.discount_paise, config?.amountPaise ?? 0) : 0
+  const afterDiscount = config ? config.amountPaise - discount : 0
+  const credits = config ? Math.min(balance, afterDiscount) : 0
+  const payable = config ? afterDiscount - (useCredits ? credits : 0) : 0
 
   const sheet = (
     <Sheet open={!!config} onClose={close} dismissible={step !== 'processing'} size="sm">
@@ -171,8 +243,18 @@ export function usePayFlow() {
                 <h3 className="mt-2 text-xl font-semibold">{config.title}</h3>
                 {config.subtitle && <p className="mt-1 text-sm text-muted">{config.subtitle}</p>}
                 <div className="mt-6 rounded-2xl bg-white/4 p-4 ring-1 ring-white/8">
-                  <Row label="Your share" value={formatINR(config.amountPaise)} />
-                  {balance > 0 && (
+                  <Row label={config.amountLabel ?? 'Your share'} value={formatINR(config.amountPaise)} />
+                  {config.lobbyId && config.promo !== false && (
+                    <PromoCode lobbyId={config.lobbyId} applied={coupon} onChange={setCoupon} disabled={busy} oneSeatOf={config.multiSeat} />
+                  )}
+                  {discount > 0 && (
+                    <Row
+                      label={`Promo ${coupon!.code}${config.multiSeat ? ' (1 seat)' : ''}`}
+                      value={`−${formatINR(discount)}`}
+                      className="mt-2 text-volt"
+                    />
+                  )}
+                  {balance > 0 && credits > 0 && (
                     <div className="mt-3 flex items-center justify-between gap-3 border-t border-white/8 pt-3">
                       <div className="flex items-center gap-2 text-sm">
                         <Wallet className="h-4 w-4 text-mint" />
@@ -188,7 +270,7 @@ export function usePayFlow() {
                   </div>
                 </div>
                 <Button block size="lg" className="mt-6" loading={busy} onClick={createAndRoute}>
-                  {payable === 0 ? 'Pay with credits' : `Continue · ${formatINR(payable)}`}
+                  {payable === 0 ? (useCredits && credits > 0 ? 'Pay with credits' : 'Confirm · nothing to pay') : `Continue · ${formatINR(payable)}`}
                 </Button>
                 <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-subtle">
                   <ShieldCheck className="h-3.5 w-3.5" /> Refunds land instantly as Pytch Credits
@@ -262,7 +344,7 @@ export function usePayFlow() {
                 </div>
                 <p className="mt-6 font-display text-xl font-semibold">Payment failed</p>
                 <p className="mt-1 text-sm text-muted">Nothing was charged. Try again?</p>
-                <Button className="mt-6" onClick={() => setStep('review')}>
+                <Button className="mt-6" onClick={backToReview}>
                   Try again
                 </Button>
               </div>
@@ -273,14 +355,5 @@ export function usePayFlow() {
     </Sheet>
   )
 
-  return { start, sheet, close }
-}
-
-function Row({ label, value, className }: { label: string; value: string; className?: string }) {
-  return (
-    <div className={cn('flex items-center justify-between text-sm', className)}>
-      <span className="text-muted">{label}</span>
-      <span className="font-semibold">{value}</span>
-    </div>
-  )
+  return { start, sheet, close, open: !!config }
 }

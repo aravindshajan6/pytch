@@ -6,7 +6,7 @@ import { Button, LinkButton } from '@/components/ui/Button'
 import { FilterChip } from '@/components/ui/Chip'
 import { Segmented } from '@/components/ui/Segmented'
 import { EmptyState, ErrorState, PageHeader, Skeleton } from '@/components/ui/States'
-import { SPORT_LIST, SPORTS } from '@/lib/sports'
+import { SPORTS, SPORT_LIST, sportInfo } from '@/lib/sports'
 import type { Sport } from '@/types/api'
 import { type FeedSort, useHighlightFeed, useRecordings } from './api'
 import { ClipCard } from './components/ClipCard'
@@ -123,7 +123,7 @@ function Feed() {
           </FilterChip>
           {SPORT_LIST.map((s) => (
             <FilterChip key={s} active={sport === s} onClick={() => patch('sport', sport === s ? null : s)}>
-              {SPORTS[s].emoji} {SPORTS[s].label}
+              {sportInfo(s).emoji} {sportInfo(s).label}
             </FilterChip>
           ))}
         </div>
@@ -143,7 +143,7 @@ function Feed() {
       ) : clips.length === 0 ? (
         <EmptyState
           icon="🎬"
-          title={sport ? `No ${SPORTS[sport].label.toLowerCase()} highlights yet` : 'No highlights yet'}
+          title={sport ? `No ${sportInfo(sport).label.toLowerCase()} highlights yet` : 'No highlights yet'}
           description="Book a recorded match on a camera turf, then cut and share your best moments."
           action={<LinkButton to="/app/discover">Find a camera turf</LinkButton>}
         />

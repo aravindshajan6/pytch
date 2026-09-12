@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 import orjson
-from sqlalchemy import and_, exists, func, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -25,10 +25,13 @@ from app.core.logging import logger
 from app.core.redis import get_redis
 from app.core.timeutils import ist_day_bounds, to_ist, utcnow
 from app.modules.gamification.catalog import XP
-from app.modules.gamification.service import award_badge, award_xp
+from app.modules.gamification.models import XpEvent
+from app.modules.gamification.service import award_xp
 from app.modules.lobbies.models import Lobby, LobbyMember
 from app.modules.notifications.service import notify
+from app.modules.platform import service as platform
 from app.modules.slots.models import Slot
+from app.modules.turfs.availability import venue_open_clause
 from app.modules.turfs.models import Pitch, Turf
 from app.modules.users.models import User
 from app.modules.weather.models import WeatherAlert
@@ -343,6 +346,7 @@ async def _alternative_rows(db: AsyncSession, lobby: Lobby, old_price: int, *, s
     origin = lobby.turf
     distance = haversine_sql(Turf.lat, Turf.lng, origin.lat, origin.lng)
     duration = lobby.end_at - lobby.start_at
+    cover = await platform.get_setting("rain_transfer_cover_paise", db)
     query = (
         select(Slot, Pitch, Turf, distance.label("distance_km"))
         .join(Pitch, Slot.pitch_id == Pitch.id)
@@ -350,7 +354,7 @@ async def _alternative_rows(db: AsyncSession, lobby: Lobby, old_price: int, *, s
         .where(
             Pitch.is_indoor.is_(True),
             Pitch.is_active.is_(True),
-            Turf.is_active.is_(True),
+            venue_open_clause(),
             Pitch.sport == lobby.sport,
             Pitch.id != lobby.pitch_id,
             Pitch.capacity + 4 >= lobby.total_spots,
@@ -358,10 +362,12 @@ async def _alternative_rows(db: AsyncSession, lobby: Lobby, old_price: int, *, s
             Slot.start_at <= lobby.start_at + TRANSFER_WINDOW,
             Slot.start_at > utcnow(),
             Slot.end_at - Slot.start_at == duration,
-            Slot.price_paise - old_price <= settings.rain_transfer_cover_paise,
+            Slot.price_paise - old_price <= cover,
             distance <= settings.rain_transfer_radius_km,
         )
     )
+    if lobby.recorded:  # the group paid for a highlight reel — only move it somewhere with a camera
+        query = query.where(Pitch.has_camera.is_(True))
     if slot_id is not None:
         query = query.where(Slot.id == slot_id)
     else:
@@ -438,13 +444,30 @@ async def transfer(db: AsyncSession, alert_id: uuid.UUID, user: User, slot_id: u
             db, uid, "match_transferred", f"☔ Moved indoors · {lobby.title}",
             f"Rain dodged! Same kick-off, new venue: {venue}. No extra cost for you.", data,
         )
-    for uid in sorted(member_ids):
-        await award_badge(db, uid, "rain_dancer")
     await award_xp(db, lobby.host_id, XP.WEATHER_SAVE, f"Saved {lobby.title} from the rain", lobby.id)
     _publish_weather(db, lobby.id)
     await db.commit()
     await db.refresh(lobby)
     return await lobbies.lobby_detail(db, lobby, user)
+
+
+RAIN_CHECK_XP_PREFIX = "Rain-checked"
+WEATHER_XP_PREFIXES = (RAIN_CHECK_XP_PREFIX, "Saved ")  # rain-check / transfer
+RAIN_CHECK_XP_DAILY_CAP = 2
+
+
+async def _weather_xp_given(db: AsyncSession, lobby: Lobby) -> bool:
+    """Host already got weather-save XP for this lobby, or hit today's rain-check XP cap."""
+    await db.flush()
+    is_weather = or_(*(XpEvent.reason.startswith(p) for p in WEATHER_XP_PREFIXES))
+    if await db.scalar(select(exists().where(XpEvent.user_id == lobby.host_id, XpEvent.ref_id == lobby.id,
+                                             is_weather))):
+        return True
+    day_start, _ = ist_day_bounds(to_ist(utcnow()).date())
+    today = await db.scalar(select(func.count()).select_from(XpEvent).where(
+        XpEvent.user_id == lobby.host_id, XpEvent.reason.startswith(RAIN_CHECK_XP_PREFIX),
+        XpEvent.created_at >= day_start))
+    return int(today or 0) >= RAIN_CHECK_XP_DAILY_CAP
 
 
 async def rain_check(db: AsyncSession, alert_id: uuid.UUID, user: User):
@@ -456,14 +479,18 @@ async def rain_check(db: AsyncSession, alert_id: uuid.UUID, user: User):
     # resolve first so our own `lobby.cancelled` handler doesn't expire it
     alert.status = "rain_checked"
     alert.resolved_at = utcnow()
+    # rain bonus: only paid non-host players, only if ≥ 2 distinct players paid, daily-capped (lobbies)
     total = await lobbies.cancel_lobby(
         db,
         lobby,
         refund_kind="rain_check",
-        bonus_paise=settings.rain_bonus_paise,
+        bonus_paise=await platform.get_setting("rain_bonus_paise", db),
         note=f"Rain-check · {lobby.title}",
     )
-    await award_xp(db, lobby.host_id, XP.WEATHER_SAVE, f"Rain-checked {lobby.title}", lobby.id)
+    payers = {m.user_id for m in lobbies.active_members(lobby) if m.status == "paid"}
+    if len(payers - {lobby.host_id}) >= 1 and not await _weather_xp_given(db, lobby):
+        # host XP: once per lobby, and never for a match only the host paid for (solo farming)
+        await award_xp(db, lobby.host_id, XP.WEATHER_SAVE, f"{RAIN_CHECK_XP_PREFIX} {lobby.title}"[:80], lobby.id)
     _publish_weather(db, lobby.id)
     await db.commit()
     await db.refresh(lobby)

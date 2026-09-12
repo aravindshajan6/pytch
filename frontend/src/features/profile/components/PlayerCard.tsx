@@ -12,7 +12,7 @@ import { useEffect, useRef } from 'react'
 import { Avatar } from '@/components/ui/Avatar'
 import { cn } from '@/lib/cn'
 import { useResolvedTheme } from '@/stores/theme'
-import { SPORTS, TIERS } from '@/lib/sports'
+import { TIERS, sportInfo } from '@/lib/sports'
 import type { PlayerStats, UserPublic } from '@/types/api'
 import { attr, FRAMES, positionCode } from '../lib'
 
@@ -45,7 +45,7 @@ export function PlayerCard({ user, stats, size = 'md', className }: PlayerCardPr
   const ts = stats?.true_skill ?? user.true_skill
   const level = stats?.level ?? user.level
   const f = FRAMES[tier]
-  const sport = user.preferred_sports[0] ? SPORTS[user.preferred_sports[0]] : null
+  const sport = user.preferred_sports[0] ? sportInfo(user.preferred_sports[0]) : null
 
   const mx = useMotionValue(0.5)
   const my = useMotionValue(0.5)

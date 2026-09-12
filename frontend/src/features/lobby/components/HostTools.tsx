@@ -8,11 +8,14 @@ import { ProgressBar } from '@/components/ui/ProgressRing'
 import { Sheet } from '@/components/ui/Sheet'
 import { useCountdown } from '@/hooks/useCountdown'
 import { useMeta } from '@/hooks/useMeta'
+import { useTimeReached } from '@/hooks/useTimeReached'
 import { api } from '@/lib/api/endpoints'
 import { qk } from '@/lib/api/queryKeys'
 import { cn } from '@/lib/cn'
 import { formatINR } from '@/lib/format'
+import { cancelCutoffHours, msBefore, subDiscountPct, subSharePaise } from '@/lib/rules'
 import type { LobbyDetail, SOSRequest } from '@/types/api'
+import { benchCountLabel, nearbyRadiusKm } from '@/features/bench/api'
 import { remainingToCover } from '../lib'
 
 export interface HostToolsProps {
@@ -20,20 +23,27 @@ export interface HostToolsProps {
   onCover: () => void
   onBalance: () => void
   balancing: boolean
-  onSos: (spots: number) => Promise<unknown>
+  /** resolves true when the SOS went out (the sheet closes), false to keep it open */
+  onSos: (spots: number) => Promise<boolean>
   onCancel: () => void
 }
 
 /** Host-only controls: cover remaining, balance teams, SOS the bench, cancel. */
 export function HostTools({ lobby, onCover, onBalance, balancing, onSos, onCancel }: HostToolsProps) {
   const [sosOpen, setSosOpen] = useState(false)
+  const cutoffHours = cancelCutoffHours(useMeta().data)
+  const kickedOff = useTimeReached(new Date(lobby.start_at).getTime())
+  // mirrors bookings.cancel_booking: confirmed matches can't be cancelled within the cutoff of kick-off
+  const pastCancelCutoff = useTimeReached(msBefore(lobby.start_at, cutoffHours))
   const open = lobby.status === 'forming' || lobby.status === 'confirmed'
   if (!open) return null
 
   const remaining = remainingToCover(lobby)
   const canCover = lobby.mode === 'split' && lobby.status === 'forming' && lobby.paid_spots < lobby.total_spots
-  const canSos = !lobby.open_sos && lobby.spots_left > 0
+  // the bench only answers for locked-in matches (bench.create_manual_sos: confirmed + upcoming)
+  const canSos = lobby.status === 'confirmed' && !kickedOff && !lobby.open_sos && lobby.spots_left > 0
   const canBalance = lobby.members.length >= 2
+  const cancelBlocked = lobby.status === 'confirmed' && pastCancelCutoff
 
   return (
     <section className="glass rounded-3xl p-5 sm:p-6" aria-label="Host tools">
@@ -69,7 +79,20 @@ export function HostTools({ lobby, onCover, onBalance, balancing, onSos, onCance
             onClick={() => setSosOpen(true)}
           />
         )}
-        <Tool icon={<Ban className="h-5 w-5" />} tone="neutral" title="Cancel match" hint="Everyone who paid is refunded to credits." onClick={onCancel} />
+        <Tool
+          icon={<Ban className="h-5 w-5" />}
+          tone="neutral"
+          title="Cancel match"
+          hint={
+            cancelBlocked
+              ? kickedOff
+                ? 'This match has already kicked off.'
+                : `Too close to kick-off — confirmed matches can't be cancelled within ${cutoffHours} h.${lobby.spots_left > 0 && !lobby.open_sos ? ' Short on players? Send an SOS instead.' : ''}`
+              : 'Everyone who paid is refunded to credits.'
+          }
+          onClick={onCancel}
+          disabled={cancelBlocked}
+        />
       </div>
       <SosSheet open={sosOpen} onClose={() => setSosOpen(false)} lobby={lobby} onSend={onSos} />
     </section>
@@ -90,6 +113,7 @@ function Tool({
   onClick,
   tone,
   busy,
+  disabled,
 }: {
   icon: React.ReactNode
   title: string
@@ -97,19 +121,26 @@ function Tool({
   onClick: () => void
   tone: keyof typeof TONES
   busy?: boolean
+  /** unavailable right now — the hint says why */
+  disabled?: boolean
 }) {
   return (
     <motion.button
       type="button"
       onClick={onClick}
-      disabled={busy}
-      whileHover={{ y: -2 }}
-      whileTap={{ scale: 0.98 }}
-      className="group flex cursor-pointer items-start gap-3 rounded-2xl bg-white/[0.03] p-3.5 text-left ring-1 ring-white/8 transition-colors hover:bg-white/6 disabled:opacity-60"
+      disabled={busy || disabled}
+      whileHover={disabled ? undefined : { y: -2 }}
+      whileTap={disabled ? undefined : { scale: 0.98 }}
+      className={cn(
+        'group flex items-start gap-3 rounded-2xl bg-white/[0.03] p-3.5 text-left ring-1 ring-white/8 transition-colors',
+        disabled ? 'cursor-not-allowed' : 'cursor-pointer hover:bg-white/6 disabled:opacity-60',
+      )}
     >
-      <span className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1', TONES[tone], busy && 'animate-pulse')}>{icon}</span>
+      <span className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1', TONES[tone], busy && 'animate-pulse', disabled && 'opacity-50')}>
+        {icon}
+      </span>
       <span className="min-w-0">
-        <span className="block text-sm font-semibold">{title}</span>
+        <span className={cn('block text-sm font-semibold', disabled && 'text-fg/50')}>{title}</span>
         <span className="block text-xs text-muted">{hint}</span>
       </span>
     </motion.button>
@@ -125,20 +156,21 @@ function SosSheet({
   open: boolean
   onClose: () => void
   lobby: LobbyDetail
-  onSend: (spots: number) => Promise<unknown>
+  onSend: (spots: number) => Promise<boolean>
 }) {
   const meta = useMeta().data
   const max = Math.max(1, lobby.spots_left)
   const [spots, setSpots] = useState(1)
   const [busy, setBusy] = useState(false)
-  const radius = meta?.bench_default_radius_km ?? 5
+  const radius = nearbyRadiusKm(meta?.bench_default_radius_km ?? 5)
   const nearby = useQuery({
-    queryKey: qk.benchNearby(lobby.turf.lat, lobby.turf.lng, lobby.sport),
+    queryKey: [...qk.benchNearby(lobby.turf.lat, lobby.turf.lng, lobby.sport), radius],
     queryFn: () => api.bench.nearby({ lat: lobby.turf.lat, lng: lobby.turf.lng, sport: lobby.sport, radius_km: radius }),
     enabled: open,
+    retry: false,
   })
-  const discount = meta?.sub_discount_pct ?? 20
-  const subPrice = Math.round((lobby.share_paise * (100 - discount)) / 100)
+  const discount = subDiscountPct(meta)
+  const subPrice = subSharePaise(lobby.share_paise, discount)
 
   return (
     <Sheet open={open} onClose={onClose} size="sm" title="SOS the bench" description="Players who toggled “Ready to sub” nearby get pinged instantly.">
@@ -147,8 +179,11 @@ function SosSheet({
         <p className="mt-3 text-sm text-muted">
           {nearby.data ? (
             <>
-              <b className="font-display text-lg text-fg">{nearby.data.count}</b> player{nearby.data.count === 1 ? '' : 's'} on the bench within {radius} km
+              <b className="font-display text-lg text-fg">{benchCountLabel(nearby.data.count)}</b> player{nearby.data.count === 1 ? '' : 's'} on the bench within{' '}
+              {radius} km
             </>
+          ) : nearby.isError ? (
+            'Couldn’t count the bench right now — the SOS still reaches everyone nearby.'
           ) : (
             'Scanning the bench…'
           )}
@@ -156,7 +191,7 @@ function SosSheet({
       </div>
       <div className="mt-4 flex items-center justify-between rounded-2xl bg-white/4 p-3 pl-4 ring-1 ring-white/8">
         <span className="text-sm">Spots to fill</span>
-        <Stepper value={Math.min(spots, max)} onChange={setSpots} min={1} max={max} />
+        <Stepper value={Math.min(spots, max)} onChange={setSpots} min={1} max={max} label="spots" />
       </div>
       <p className="mt-3 text-xs text-muted">
         Subs get the seat at {discount}% off ({formatINR(subPrice)}). First to accept gets 5 minutes to pay.
@@ -170,8 +205,9 @@ function SosSheet({
         onClick={async () => {
           setBusy(true)
           try {
-            await onSend(Math.min(spots, max))
-            onClose()
+            if (await onSend(Math.min(spots, max))) onClose()
+          } catch {
+            /* onSend reports its own errors — keep the sheet open to retry */
           } finally {
             setBusy(false)
           }

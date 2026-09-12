@@ -44,9 +44,15 @@ export function formatDay(iso: string | Date): string {
 /** "Today · 7:00 PM" */
 export const formatWhen = (iso: string | Date) => `${formatDay(iso)} · ${formatTime(iso)}`
 
-/** "7–8 PM" */
-export const formatSlotRange = (start: string, end: string) =>
-  `${formatInTimeZone(toDate(start), TZ, 'h')}–${formatInTimeZone(toDate(end), TZ, 'h a')}`
+/** "7–8 PM", "6:30–7:30 AM", and "11 AM–12 PM" when the range crosses noon/midnight (never an ambiguous "11–12 PM"). */
+export function formatSlotRange(start: string, end: string): string {
+  const s = toDate(start)
+  const e = toDate(end)
+  const clock = (d: Date) => formatInTimeZone(d, TZ, formatInTimeZone(d, TZ, 'mm') === '00' ? 'h' : 'h:mm')
+  const sMer = formatInTimeZone(s, TZ, 'a')
+  const eMer = formatInTimeZone(e, TZ, 'a')
+  return `${clock(s)}${sMer === eMer ? '' : ` ${sMer}`}–${clock(e)} ${eMer}`
+}
 
 export const formatDateLong = (iso: string | Date) => formatInTimeZone(toDate(iso), TZ, 'd MMM yyyy')
 

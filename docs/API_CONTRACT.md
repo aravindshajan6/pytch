@@ -4,7 +4,7 @@
 [`frontend/src/types/api.ts`](../frontend/src/types/api.ts). That file is canonical; backend
 Pydantic schemas mirror it field-for-field (snake_case JSON on both sides).
 
-- REST base: `/api/v1` · WebSocket: `/ws?token=<access_token>` · Static media: `/media/*`
+- REST base: `/api/v1` · WebSocket: `/ws` (access token as the 2nd subprotocol, see Realtime) · Static media: `/media/*`
 - Auth: `Authorization: Bearer <access_token>` (JWT HS256, `type=access`, 60 min). Refresh token: `type=refresh`, 30 days.
 - Errors: HTTP status + `{"error": {"code", "message", "details"}}`. Pydantic validation → `422 VALIDATION_ERROR`.
 - Lists that paginate return `Page<T>` with `?limit=` (default 20, max 100) and `?offset=`.
@@ -21,9 +21,10 @@ Pydantic schemas mirror it field-for-field (snake_case JSON on both sides).
 ## Auth (module `auth`)
 | Method | Path | Body | Response | Notes |
 |---|---|---|---|---|
-| POST | `/auth/otp/request` | `OtpRequest` | `OtpRequestResponse` | OTP (6 digits) in Redis 5 min; 5 requests / 10 min / phone → `429 RATE_LIMITED`. In demo mode `dev_code` is returned. |
+| POST | `/auth/otp/request` | `OtpRequest` | `OtpRequestResponse` | OTP (6 digits) in Redis 5 min; 5 requests / 10 min / phone, 20 / h / IP and a global per-minute budget → `429 RATE_LIMITED`. In demo mode `dev_code` is returned. |
 | POST | `/auth/otp/verify` | `OtpVerify` | `AuthTokens` | Creates user (name = "Player XXXX") + `player_stats` row on first login → `is_new_user`. Wrong code → `400 INVALID_OTP`. |
 | POST | `/auth/refresh` | `RefreshRequest` | `AuthTokens` | |
+| POST 🔒 | `/auth/logout` | – | `{ok:true}` | Revokes the session: access + refresh tokens stop working and its live WebSockets close (`4401`). |
 
 ## Users (module `users`)
 | Method | Path | Body | Response |
@@ -65,10 +66,11 @@ Pydantic schemas mirror it field-for-field (snake_case JSON on both sides).
 | Method | Path | Body | Response |
 |---|---|---|---|
 | GET 🔒 | `/payments/mine` | – | `Payment[]` |
+| POST 🔒 | `/payments/{id}/cancel` | – | `Payment` — checkout closed: cancels a `created` intent, returns its credits/coupon now (idempotent; a late capture is refunded to credits) |
 | POST 🔒 | `/payments/{id}/mock/complete` | `MockCompleteRequest` | `Payment` (only when provider=mock) |
 | POST 🔒 | `/payments/{id}/verify` | `RazorpayVerifyRequest` | `Payment` (`400 INVALID_SIGNATURE`) |
 | POST | `/payments/webhooks/razorpay` | raw Razorpay event, header `X-Razorpay-Signature` | `{ok:true}` (idempotent via `webhook_events`) |
-| GET 🔒 | `/wallet` | – | `Wallet` (last 50 txns) |
+| GET 🔒 | `/wallet` | – | `Wallet` (balance, lifetime `total_credited_paise` / `total_spent_paise`, last 50 txns) |
 
 ## Ratings (module `ratings`)
 | Method | Path | Body | Response |
@@ -138,7 +140,7 @@ Pydantic schemas mirror it field-for-field (snake_case JSON on both sides).
 
 ## WebSocket protocol
 
-Connect `ws(s)://<host>/ws?token=<access_token>`. The server auto-subscribes the socket to `user:<my_id>`.
+Connect `new WebSocket("ws(s)://<host>/ws", ["pytch.v1", accessToken])` (native clients may send `Authorization: Bearer`; query-string tokens are refused so they never reach access logs). The server auto-subscribes the socket to `user:<my_id>`.
 
 Client → server (`ClientWsMessage`): `subscribe` / `unsubscribe` / `ping`.
 Server → client (`ServerWsMessage`): `hello`, `pong`, `error`, and `event` envelopes:
@@ -149,8 +151,12 @@ Server → client (`ServerWsMessage`): `hello`, `pong`, `error`, and `event` env
 | Channel | Who may subscribe | Events |
 |---|---|---|
 | `user:<id>` | auto (self only) | `notification.new`, `sos.new`, `sos.closed`, `wallet.updated`, `badge.earned`, `level.up` |
-| `lobby:<id>` | members, or anyone if lobby is public | `lobby.updated` (invalidate → refetch `GET /lobbies/{id}`), `lobby.message` |
-| `pitch:<id>` | anyone authenticated | `slot.updated` |
+| `lobby:<id>` | members, or anyone if lobby is public | `lobby.updated` (invalidate → refetch `GET /lobbies/{id}`) |
+| `chat:<id>` | current members only (dropped server-side on leave/removal) | `lobby.message` |
+| `pitch:<id>` | anyone authenticated (active pitches only); partners: own venues | `slot.updated` |
+
+Auth: the access token is the 2nd WebSocket subprotocol (`new WebSocket(url, ['pytch.v1', token])`) — never a query string.
+Limits: 10 sockets/user, 50 channels/socket, 20 messages/10 s. Revoked sessions are closed with code `4401`; over-limit `4429`.
 
 Backplane: every API instance holds one Redis `PSUBSCRIBE pytch:ws:*` and fans out to its local sockets.
 Publishers call `publish_on_commit(db, channel, event, data)` so events fire only after the transaction commits.
@@ -162,7 +168,11 @@ Publishers call `publish_on_commit(db, channel, event, data)` so events fire onl
 - **Private lobbies** return 404 by id to non-members; they're reachable via invite code or an open SOS.
 - **Dropout credit:** whoever pays for a seat reopened by a paid dropout (sub or regular joiner) triggers the credit to the earliest uncompensated dropout — exactly what the newcomer paid, capped at what the dropout paid. Otherwise the payment reimburses a host who fronted money (full mode / cover-remaining).
 - **Refunds on cancel/expiry** net out any host reimbursements already paid, so credits out always equal money in.
-- **Weather transfer** creates a new booking linked via `transferred_from_id`; the group keeps paying the original total (Pytch covers up to `rain_transfer_cover_paise`). Alternatives list one slot per pitch (closest kickoff).
+- **Weather transfer** creates a new booking linked via `transferred_from_id`; the group keeps paying the original total (Pytch covers up to `rain_transfer_cover_paise`). Alternatives list one slot per pitch (closest kickoff). A **recorded** match is only offered pitches with a camera (the paid recording never silently disappears); otherwise rain-check.
+- **Bookable venue** (discovery, slot lists, new bookings): pitch + venue active, the venue's partner (if any) approved, sport enabled in the catalog. Existing matches continue.
+- **Abuse limits:** ≤ 2 unpaid split + 1 unpaid full booking open per host (`409 LIMIT_REACHED`), 10 bookings/10 min (`429`); chat 10 msgs/10 s and 60/10 min (`429`); bench nearby 30/min (`429`); `GET /lobbies/{id}/messages` members only (`403 NOT_MEMBER`); private lobbies need the invite code to join (`?code=`).
+- **Sub price** (SOS) is rounded up to a whole rupee; the discount never exceeds `sub_discount_pct`.
+- **Bench nearby** counts are exact up to 3, then bucket floors (4, 10, 20, 50 → "4+"…); dots are placed within ~1 km grid cells.
 - **No-show ratings:** when `showed_up=false`, skill and fair-play inputs are ignored (neutral); only reliability is penalised. Two no-show reports additionally count a no-show.
 - **Quick-match `score`** is 0..100 (shown as "% match").
 - **Refunds** always land as Pytch Credits (no gateway refunds in this version).

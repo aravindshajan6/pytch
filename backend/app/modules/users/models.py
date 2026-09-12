@@ -28,6 +28,10 @@ class User(TimestampMixin, Base):
     wallet_balance_paise: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     onboarded: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     is_bot: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # moderation (admin): active | suspended | banned — non-active users can't use any authenticated API
+    status: Mapped[str] = mapped_column(String(10), default="active", server_default="active", index=True)
+    status_reason: Mapped[str | None] = mapped_column(String(300))
+    suspended_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     stats: Mapped["PlayerStats"] = relationship(

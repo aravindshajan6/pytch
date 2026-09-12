@@ -80,7 +80,19 @@ def user_channel(user_id: Any) -> str:
 
 
 def lobby_channel(lobby_id: Any) -> str:
+    """Public lobby state (seat updates) — visible to anyone who can see the lobby."""
     return f"lobby:{lobby_id}"
+
+
+def chat_channel(lobby_id: Any) -> str:
+    """Lobby chat — current members only."""
+    return f"chat:{lobby_id}"
+
+
+def unsubscribe_on_commit(db: AsyncSession, user_id: Any, channel: str) -> None:
+    """After commit, drop `channel` from every live socket of `user_id` on every instance (e.g. chat of a
+    lobby they just left or were removed from)."""
+    publish_on_commit(db, f"unsub:{user_id}", "unsubscribe", {"channel": channel})
 
 
 def pitch_channel(pitch_id: Any) -> str:

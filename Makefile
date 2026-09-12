@@ -1,4 +1,4 @@
-.PHONY: help up down logs ps build reseed infra api worker web test lint typecheck migrate migration
+.PHONY: help up down logs ps build reseed infra api worker web seed test lint typecheck migrate migration
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -28,10 +28,13 @@ infra: ## Start only Postgres + Redis for local dev
 	docker compose up -d db redis
 
 api: ## Run the API with hot reload (needs `make infra`)
-	cd backend && .venv/bin/alembic upgrade head && .venv/bin/uvicorn app.main:app --reload --port 8000
+	cd backend && .venv/bin/alembic upgrade head && DEMO_MODE=true .venv/bin/uvicorn app.main:app --reload --port 8000
 
 worker: ## Run the background worker locally
-	cd backend && .venv/bin/python -m app.worker
+	cd backend && DEMO_MODE=true .venv/bin/python -m app.worker
+
+seed: ## Seed demo data locally (demo mode only)
+	cd backend && DEMO_MODE=true .venv/bin/python -m app.seed
 
 web: ## Run the Vite dev server (proxies /api, /ws, /media → :8000)
 	cd frontend && npm run dev

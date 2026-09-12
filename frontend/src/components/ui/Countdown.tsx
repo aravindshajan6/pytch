@@ -3,7 +3,9 @@ import { useEffect, useRef } from 'react'
 import { useCountdown } from '@/hooks/useCountdown'
 import { cn } from '@/lib/cn'
 
-/** Split-flap style ticking countdown. Turns flare-red under `urgentMs`. */
+const glyphWidth = (ch: string) => (ch === ':' ? '0.45em' : ch === ' ' ? '0.3em' : '0.62em')
+
+/** Split-flap style ticking countdown ("12:04", or "5d 11h" when far out). Turns flare-red under `urgentMs`. */
 export function Countdown({
   to,
   className,
@@ -23,9 +25,9 @@ export function Countdown({
     if (c.expired) expireRef.current?.()
   }, [c.expired])
   return (
-    <span className={cn('inline-flex font-mono tabular-nums', urgent ? 'text-flare' : 'text-fg', className)}>
+    <span role="timer" aria-label={c.label} className={cn('inline-flex font-mono tabular-nums', urgent ? 'text-flare' : 'text-fg', className)}>
       {c.label.split('').map((ch, i) => (
-        <span key={i} className="relative inline-block overflow-hidden" style={{ width: ch === ':' ? '0.45em' : '0.62em' }}>
+        <span key={i} aria-hidden className="relative inline-block overflow-hidden" style={{ width: glyphWidth(ch) }}>
           <AnimatePresence mode="popLayout" initial={false}>
             <motion.span
               key={ch + i}

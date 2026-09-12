@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
+from pydantic import Field
+
 from app.core.schemas import InputSchema, Schema
 
 PaymentStatus = Literal["created", "paid", "failed", "refunded", "cancelled"]
@@ -13,6 +15,7 @@ PaymentProvider = Literal["mock", "razorpay", "wallet"]
 
 class PayRequest(InputSchema):
     use_credits: bool = True
+    coupon_code: str | None = Field(None, max_length=40)
 
 
 class RazorpayPrefill(Schema):
@@ -37,6 +40,8 @@ class PaymentIntent(Schema):
     purpose: PaymentPurpose
     amount_paise: int
     credits_applied_paise: int
+    discount_paise: int = 0  # coupon discount
+    coupon_code: str | None = None
     payable_paise: int
     lobby_id: uuid.UUID | None
     razorpay: RazorpayCheckoutOptions | None = None

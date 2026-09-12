@@ -203,7 +203,7 @@ async def test_transfer_moves_match_indoors(client, rainy_match):
         moved = (await s.scalars(select(Notification).where(Notification.type == "match_transferred"))).all()
         assert len(moved) == 4
         dancers = (await s.scalars(select(UserBadge.user_id).where(UserBadge.badge_code == "rain_dancer"))).all()
-        assert set(dancers) == {m["host"].id, *(p.id for p in m["players"])}
+        assert dancers == []  # Rain Dancer is earned by playing the rescued match (match.completed), not the move
     r = await client.post(url, json={"slot_id": str(m["slots"]["far"].id)}, headers=auth_headers(m["host"]))
     assert r.status_code == 409  # already resolved
 
@@ -223,8 +223,9 @@ async def test_rain_check_refunds_with_bonus(client, rainy_match):
         assert alert.status == "rain_checked"
         from app.modules.users.models import User
         balances = {u.id: u.wallet_balance_paise for u in (await s.scalars(select(User))).unique().all()}
-        for uid in [m["host"].id, *(p.id for p in m["players"])]:
+        for uid in [p.id for p in m["players"]]:
             assert balances[uid] == share + 2500
+        assert balances[m["host"].id] == share  # the host decides the rain-check → no bonus for them
 
 
 async def test_dismiss(client, rainy_match):
@@ -275,3 +276,38 @@ async def test_dev_storm_and_cancel_closes_alert(client, db, make_user):
         await emit(s, "lobby.cancelled", lobby_id=lobby.id)
         await s.commit()
         assert (await s.get(WeatherAlert, alert["id"])).status == "expired"
+
+
+async def test_recorded_match_only_moves_to_camera_pitches_and_badge_waits_for_the_game(client, db, make_user):
+    """FUNC5-01: a paid recording never silently vanishes on a transfer. FUNC5-18: Rain Dancer is for playing it."""
+    from app.modules.lobbies import service as lobbies
+
+    host, *players = await make_users(make_user, 3, prefix="Cam")
+    outdoor = await make_pitch(db, name="Open Air Cam", price=150000, camera_fee=25000)
+    kickoff = hour_from_now(26)
+    lobby = await make_lobby(db, outdoor, host, players, start=kickoff, total_spots=10, recorded=True)
+    async with SessionLocal() as s:
+        alert = await ws.create_alert(s, await s.get(Lobby, lobby.id), probability=88, mm=6.2)
+        await s.commit()
+        alert_id = alert.id
+    no_cam = await make_pitch(db, name="Dome Plain", lat=km_north(1), lng=KOCHI[1], indoor=True, price=150000)
+    cam = await make_pitch(db, name="Dome Cam", lat=km_north(4), lng=KOCHI[1], indoor=True, price=150000,
+                           camera_fee=25000)
+    plain_slot, cam_slot = await make_slot(db, no_cam, kickoff), await make_slot(db, cam, kickoff)
+
+    alts = (await client.get(f"{API}/weather/alerts/{alert_id}/alternatives", headers=auth_headers(host))).json()
+    assert [a["pitch"]["id"] for a in alts] == [str(cam.id)]  # the closer camera-less dome isn't offered
+    url = f"{API}/weather/alerts/{alert_id}/transfer"
+    assert (await client.post(url, json={"slot_id": str(plain_slot.id)}, headers=auth_headers(host))).status_code == 422
+    r = await client.post(url, json={"slot_id": str(cam_slot.id)}, headers=auth_headers(host))
+    assert r.status_code == 200, r.text
+    assert r.json()["recorded"] is True
+
+    async with SessionLocal() as s:
+        assert (await s.scalars(select(UserBadge).where(UserBadge.badge_code == "rain_dancer"))).all() == []
+        lob = await s.get(Lobby, lobby.id)
+        lob.start_at, lob.end_at = utcnow() - timedelta(hours=2), utcnow() - timedelta(hours=1)
+        await lobbies.complete_match(s, lob)
+        await s.commit()
+        dancers = set((await s.scalars(select(UserBadge.user_id).where(UserBadge.badge_code == "rain_dancer"))).all())
+    assert dancers == {host.id, *(p.id for p in players)}

@@ -11,11 +11,11 @@ import { EmptyState, ErrorState, PageHeader } from '@/components/ui/States'
 import { LobbyCard, LobbyCardSkeleton } from '@/features/lobby/components/LobbyCard'
 import { clientEligibility } from '@/features/lobby/lib'
 import { useMe } from '@/hooks/useMe'
+import { useSports } from '@/hooks/useSports'
 import type { LobbyQuery } from '@/lib/api/endpoints'
 import { api } from '@/lib/api/endpoints'
 import { qk } from '@/lib/api/queryKeys'
 import { TZ, istDate } from '@/lib/format'
-import { SPORTS, SPORT_LIST } from '@/lib/sports'
 import { useLocationStore } from '@/stores/location'
 import type { Sport } from '@/types/api'
 import { QuickMatch } from './QuickMatch'
@@ -41,6 +41,7 @@ export default function PlayPage() {
   const [date, setDate] = useState('')
   const [includeIneligible, setIncludeIneligible] = useState(false)
   const dates = useMemo(dateOptions, [])
+  const sports = useSports()
 
   const query: LobbyQuery = {
     lat: round(lat),
@@ -75,9 +76,9 @@ export default function PlayPage() {
             <FilterChip active={!sport} onClick={() => setSport(undefined)}>
               All sports
             </FilterChip>
-            {SPORT_LIST.map((s) => (
-              <FilterChip key={s} active={sport === s} onClick={() => setSport(sport === s ? undefined : s)}>
-                <span>{SPORTS[s].emoji}</span> {SPORTS[s].label}
+            {sports.map((s) => (
+              <FilterChip key={s.key} active={sport === s.key} onClick={() => setSport(sport === s.key ? undefined : s.key)}>
+                <span>{s.emoji}</span> {s.label}
               </FilterChip>
             ))}
           </div>

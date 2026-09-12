@@ -121,8 +121,8 @@
 1. Worker scans confirmed/forming lobbies on **outdoor** pitches starting in the next 48 h; fetches Open-Meteo hourly forecast (cached by rounded coordinates).
 2. **Risk rule:** precipitation probability ≥ 60% *or* precipitation ≥ 2 mm/h in the slot window → alert. `≥ 80% or ≥ 5 mm` = *warning*, else *watch*.
 3. Host + members get a weather alert; host gets **one-click options**:
-   - **Transfer indoors:** alternatives = indoor pitches, same sport, within 10 km, free slot at the same kickoff (±1 h), sorted by distance with price delta. Pytch covers up to **₹200** price difference ("rain guarantee"); options above that aren't offered. Transfer atomically locks the new slot (`FOR UPDATE NOWAIT`), releases the old one, moves the lobby, and notifies everyone.
-   - **Rain-check:** cancel with **100% refund as credits** to every payer + ₹25 "rain bonus" each.
+   - **Transfer indoors:** (recorded matches: camera pitches only) alternatives = indoor pitches, same sport, within 10 km, free slot at the same kickoff (±1 h), sorted by distance with price delta. Pytch covers up to **₹200** price difference ("rain guarantee"); options above that aren't offered. Transfer atomically locks the new slot (`FOR UPDATE NOWAIT`), releases the old one, moves the lobby, and notifies everyone.
+   - **Rain-check:** cancel with **100% refund as credits** to every payer + ₹25 "rain bonus" for each paying *player* (not the host; only when ≥ 2 different players paid; max 2 bonuses per player per day — anti-farming).
    - **Dismiss** ("we'll play in the rain").
 4. Slot grids show hourly rain probability chips so users avoid risky slots *before* booking.
 
@@ -130,7 +130,7 @@
 
 ## 7. Retention & engagement design
 
-- **XP & levels** for playing (+100), hosting (+50), rating (+15 each), subbing (+150), clipping (+20). Level curve `xp_for(level) = 100·(level−1)²·… ` (see code).
+- **XP & levels** for playing (+100), hosting (+50, on match completion — not confirmation), rating (+15 each), subbing (+150), clipping (+20, once per recording; clip views count once per viewer per day, never the owner's). Level curve `xp_for(level) = 100·(level−1)²·… ` (see code).
 - **Weekly streaks** (played at least once per ISO week) with streak flame on the dashboard.
 - **Badges** (common → legendary): First Whistle, Hat-trick, Regular, Squad Leader, Hero Sub, Rain Dancer, Verified Playmaker, Fair Play Ace, Night Owl, Early Bird, Highlight Reel, Critic.
 - **Leaderboards** (weekly XP, all-time True Skill).

@@ -86,7 +86,8 @@ async def test_balance_teams_kick_chat_and_visibility(client, db, make_user):
     _, pitch = await make_venue(db)
     slot = await make_slot(db, pitch)
     lob = (await book(client, host, slot, total_spots=6, visibility="private"))["lobby"]
-    for p in players:
+    for p in players:  # private lobbies are joined through the invite link (code) first
+        assert (await client.get(f"{API}/lobbies/code/{lob['code']}", headers=auth_headers(p))).status_code == 200
         await join(client, p, lob["id"])
 
     # private: hidden by id for strangers, reachable by code

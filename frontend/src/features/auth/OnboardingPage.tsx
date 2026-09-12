@@ -18,11 +18,13 @@ import { api } from '@/lib/api/endpoints'
 import { qk } from '@/lib/api/queryKeys'
 import { celebrate } from '@/lib/celebrate'
 import { cn } from '@/lib/cn'
-import { SPORTS, SPORT_LIST } from '@/lib/sports'
+import { SPORTS, SPORT_LIST, sportInfo } from '@/lib/sports'
 import { useAuth } from '@/stores/auth'
-import { requestGps, useLocationStore } from '@/stores/location'
+import { requestGps, syncHomeLocation, useLocationStore } from '@/stores/location'
 import type { AreaMeta, DominantFoot, SkillLevel, Sport, SportMeta, UserMe } from '@/types/api'
 import { AuthBackdrop } from './AuthBackdrop'
+import { useLogout } from './useLogout'
+import { safeInAppPath } from '@/lib/safePath'
 
 const STEPS = ['Name', 'Sports', 'Your game', 'Home turf', 'Done'] as const
 
@@ -74,9 +76,7 @@ function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: num
   return 2 * R * Math.asin(Math.sqrt(s))
 }
 
-function safeNext(next: string | null) {
-  return next && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/onboarding') ? next : '/app'
-}
+const safeNext = (next: string | null) => safeInAppPath(next, '/app', { exclude: ['/onboarding'] })
 
 export default function OnboardingPage() {
   const { user } = useMe()
@@ -84,7 +84,7 @@ export default function OnboardingPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const [params] = useSearchParams()
-  const logout = useAuth((s) => s.logout)
+  const { logout, pending: loggingOut } = useLogout('/login')
 
   const [step, setStep] = useState(0)
   const [dir, setDir] = useState(1)
@@ -92,7 +92,7 @@ export default function OnboardingPage() {
   const headingRef = useRef<HTMLHeadingElement>(null)
 
   const sports: SportMeta[] = useMemo(
-    () => meta.data?.sports ?? SPORT_LIST.map((key) => ({ key, label: SPORTS[key].label, emoji: SPORTS[key].emoji, formats: [] })),
+    () => meta.data?.sports ?? SPORT_LIST.map((key) => ({ key, label: sportInfo(key).label, emoji: sportInfo(key).emoji, formats: [] })),
     [meta.data],
   )
   const areas = meta.data?.areas ?? (meta.isError ? FALLBACK_AREAS : null)
@@ -123,8 +123,7 @@ export default function OnboardingPage() {
     onSuccess: (updated: UserMe) => {
       useAuth.getState().setUser(updated)
       qc.setQueryData(qk.me, updated)
-      if (updated.home_lat != null && updated.home_lng != null && useLocationStore.getState().source !== 'gps')
-        useLocationStore.getState().set(updated.home_lat, updated.home_lng, 'home', updated.home_area ?? 'Home')
+      syncHomeLocation(updated)
       navigate(safeNext(params.get('next')), { replace: true })
     },
     onError: (e) => toast.error('Couldn’t save your profile', { description: errorMessage(e) }),
@@ -165,13 +164,11 @@ export default function OnboardingPage() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => {
-              logout()
-              navigate('/login', { replace: true })
-            }}
-            className="flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-muted transition hover:bg-white/5 hover:text-fg"
+            onClick={logout}
+            disabled={loggingOut}
+            className="flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 text-sm text-muted transition hover:bg-white/5 hover:text-fg disabled:cursor-wait disabled:opacity-60"
           >
-            <LogOut className="h-4 w-4" /> Log out
+            <LogOut className="h-4 w-4" /> {loggingOut ? 'Logging out…' : 'Log out'}
           </button>
           <ThemeToggle className="h-9 w-9 rounded-lg [&_svg]:h-[18px] [&_svg]:w-[18px]" />
         </div>
@@ -419,7 +416,7 @@ function StepGame({ headingRef, draft, patch }: { headingRef: HeadingRef; draft:
 
       <fieldset>
         <legend className="mb-3 text-xs font-semibold tracking-wider text-muted uppercase">
-          Position <span className="normal-case">· {SPORTS[primary].emoji} {SPORTS[primary].label}</span>
+          Position <span className="normal-case">· {sportInfo(primary).emoji} {sportInfo(primary).label}</span>
         </legend>
         <div className="flex flex-wrap gap-2" role="radiogroup">
           {positions.map((p) => {
@@ -491,16 +488,33 @@ function StepGame({ headingRef, draft, patch }: { headingRef: HeadingRef; draft:
         <fieldset className="mt-8">
           <legend className="mb-3 text-xs font-semibold tracking-wider text-muted uppercase">Stronger foot</legend>
           <Segmented<DominantFoot>
+            aria-label="Stronger foot"
             value={draft.foot ?? ('' as DominantFoot)}
             onChange={(foot) => patch({ foot })}
             options={[
-              { value: 'left', label: '🦶 Left' },
-              { value: 'right', label: 'Right 🦶' },
-              { value: 'both', label: 'Both' },
+              { value: 'left', label: <FootLabel feet={['left']} text="Left" /> },
+              { value: 'right', label: <FootLabel feet={['right']} text="Right" /> },
+              { value: 'both', label: <FootLabel feet={['left', 'right']} text="Both" /> },
             ]}
           />
         </fieldset>
       )}
+    </>
+  )
+}
+
+/** Foot emoji always leads the label; the left foot is the mirrored glyph, so "Both" reads as a pair. */
+function FootLabel({ feet, text }: { feet: ('left' | 'right')[]; text: string }) {
+  return (
+    <>
+      <span aria-hidden className="inline-flex -space-x-0.5">
+        {feet.map((f) => (
+          <span key={f} className={cn('inline-block', f === 'left' && '-scale-x-100')}>
+            🦶
+          </span>
+        ))}
+      </span>
+      {text}
     </>
   )
 }

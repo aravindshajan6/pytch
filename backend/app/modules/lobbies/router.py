@@ -53,7 +53,8 @@ async def mine(user: CurrentUser, db: DB, scope: Literal["upcoming", "past"] = "
 
 @router.get("/code/{code}", response_model=LobbyDetail)
 async def by_code(code: str, user: CurrentUser, db: DB) -> LobbyDetail:
-    lobby = await service.get_lobby_by_code(db, code)
+    """Opening an invite also lets the viewer join a private lobby by id (see `join`)."""
+    lobby = await service.open_by_code(db, code, user)
     return await service.lobby_detail(db, lobby, user)
 
 
@@ -64,8 +65,11 @@ async def get_lobby(lobby_id: uuid.UUID, user: CurrentUser, db: DB) -> LobbyDeta
 
 
 @router.post("/{lobby_id}/join", response_model=LobbyDetail)
-async def join(lobby_id: uuid.UUID, user: CurrentUser, db: DB) -> LobbyDetail:
-    lobby = await service.join_lobby(db, lobby_id, user)
+async def join(
+    lobby_id: uuid.UUID, user: CurrentUser, db: DB, code: str | None = Query(None, max_length=16)
+) -> LobbyDetail:
+    """Private lobbies: pass the invite `code` (or open `/lobbies/code/{code}` first); otherwise 404."""
+    lobby = await service.join_lobby(db, lobby_id, user, code=code)
     return await service.lobby_detail(db, lobby, user)
 
 
@@ -77,12 +81,14 @@ async def leave(lobby_id: uuid.UUID, user: CurrentUser, db: DB) -> LobbyDetail:
 
 @router.post("/{lobby_id}/pay", response_model=PaymentIntent)
 async def pay(lobby_id: uuid.UUID, body: PayRequest, user: CurrentUser, db: DB) -> PaymentIntent:
-    return await payments.pay_for_seat(db, user, lobby_id, use_credits=body.use_credits)
+    return await payments.pay_for_seat(db, user, lobby_id, use_credits=body.use_credits,
+                                       coupon_code=body.coupon_code)
 
 
 @router.post("/{lobby_id}/cover-remaining", response_model=PaymentIntent)
 async def cover_remaining(lobby_id: uuid.UUID, body: PayRequest, user: CurrentUser, db: DB) -> PaymentIntent:
-    return await payments.cover_remaining(db, user, lobby_id, use_credits=body.use_credits)
+    return await payments.cover_remaining(db, user, lobby_id, use_credits=body.use_credits,
+                                          coupon_code=body.coupon_code)
 
 
 @router.post("/{lobby_id}/balance-teams", response_model=LobbyDetail)

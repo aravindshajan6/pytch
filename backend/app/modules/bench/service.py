@@ -21,11 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.errors import AppError, Forbidden, NotFound
 from app.core.geo import haversine_km, haversine_sql
+from app.core.ratelimit import enforce
 from app.core.timeutils import to_ist, utcnow
 from app.modules.bench.models import BenchStatus, SOSDispatch, SOSRequest
 from app.modules.bench.schemas import BenchNearby, BenchStatusOut, BenchUpdate, Blip, CreateSOSRequest, SOSRequestOut
 from app.modules.lobbies.models import Lobby, LobbyMember
 from app.modules.notifications.service import notify
+from app.modules.platform import service as platform
 from app.modules.users.models import PlayerStats, User
 from app.realtime.publisher import lobby_channel, publish_on_commit, user_channel
 
@@ -33,6 +35,14 @@ ACTIVE = ("joined", "paid")
 DEFAULT_DURATION_MINUTES = 120
 MAX_BLIPS = 30
 BLIP_FUZZ_M = 300
+CELL_BLIP_FUZZ_M = 450  # radar blips sit anywhere in (roughly) the bencher's grid cell
+GRID_DEG = 0.01  # ~1.1 km — /bench/nearby never resolves a bencher more finely than this cell
+SNAP_MARGIN_KM = 1.0  # > half the cell diagonal
+NEARBY_RADII_KM = (2.0, 5.0, 10.0, 15.0)
+NEARBY_EXACT_UPTO = 3
+NEARBY_BUCKETS = (4, 10, 20, 50)
+NEARBY_RATE = (30, 60)  # per user: requests per seconds (the radar polls every 20 s)
+NEARBY_RATE_HOURLY = (400, 3600)
 SOS_LOBBY_STATUSES = ("confirmed",)
 
 
@@ -54,8 +64,11 @@ class InvalidBench(AppError):
 
 # ───────────────────────────── helpers ─────────────────────────────
 def discount_for(share_paise: int, pct: int | None = None) -> int:
+    """Sub discount such that the sub pays whole rupees (price rounded up, so the discount never exceeds `pct`)."""
     pct = settings.sub_discount_pct if pct is None else pct
-    return share_paise * pct // 100
+    price = share_paise - share_paise * pct // 100
+    whole_rupees = -(-price // 100) * 100
+    return max(share_paise - whole_rupees, 0)
 
 
 def is_bench_live(bench: BenchStatus | None, now: datetime | None = None) -> bool:
@@ -196,6 +209,23 @@ async def update_bench(db: AsyncSession, user: User, body: BenchUpdate) -> Bench
     return _bench_out(bench, user, await _subs_made(db, user.id))
 
 
+def snap(lat: float, lng: float, step: float = GRID_DEG) -> tuple[float, float]:
+    """Centre of the ~1.1 km grid cell containing the point."""
+    return round(math.floor(lat / step) * step + step / 2, 5), round(math.floor(lng / step) * step + step / 2, 5)
+
+
+def clamp_radius(radius_km: float) -> float:
+    """Smallest allowed radius ≥ the requested one (so arbitrary radii can't be bisected)."""
+    return next((r for r in NEARBY_RADII_KM if r >= radius_km - 1e-9), NEARBY_RADII_KM[-1])
+
+
+def bucket_count(n: int) -> int:
+    """Exact up to NEARBY_EXACT_UPTO, then the floor of a bucket (4, 10, 20, 50 → "4+", "10+", …)."""
+    if n <= NEARBY_EXACT_UPTO:
+        return n
+    return max(b for b in NEARBY_BUCKETS if b <= n)
+
+
 async def nearby(
     db: AsyncSession,
     user: User,
@@ -205,9 +235,23 @@ async def nearby(
     sport: str | None,
     radius_km: float,
 ) -> BenchNearby:
+    """"N players on the bench near here" + radar blips, without leaking anyone's location (SEC2-03).
+
+    * The query centre is snapped to the ~1.1 km grid and the radius to NEARBY_RADII_KM.
+    * Benchers are counted by the centre of their grid cell, never their exact position, so repeated
+      queries (moving centres / radii) can at best recover the cell (~1 km), not the player.
+    * `count` is exact up to 3, then a bucket floor (4 = "4–9", 10 = "10–19", 20 = "20–49", 50 = "50+");
+      `blips` has at most `count` entries, each placed at a per-bencher, per-IST-day stable point in that
+      cell (stable so it can't be averaged out by polling).
+    * Rate-limited per user.
+    """
+    await enforce(f"bench-nearby:{user.id}", *NEARBY_RATE, "Too many radar refreshes — try again in a minute")
+    await enforce(f"bench-nearby-h:{user.id}", *NEARBY_RATE_HOURLY, "Too many radar refreshes — try again later")
     if lat is None or lng is None:
         origin = _origin_for(user, await _bench_row(db, user.id))
         lat, lng = origin if origin else (settings.city_center_lat, settings.city_center_lng)
+    lat, lng = snap(lat, lng)
+    radius_km = clamp_radius(radius_km)
     now = utcnow()
     distance = haversine_sql(BenchStatus.lat, BenchStatus.lng, lat, lng)
     query = select(BenchStatus.user_id, BenchStatus.lat, BenchStatus.lng).where(
@@ -216,14 +260,22 @@ async def nearby(
         BenchStatus.lng.is_not(None),
         (BenchStatus.active_until.is_(None)) | (BenchStatus.active_until > now),
         BenchStatus.user_id != user.id,
-        distance <= radius_km,
+        distance <= radius_km + SNAP_MARGIN_KM,  # coarse prefilter; the decision uses the snapped cell below
     )
     if sport:
         query = query.where(BenchStatus.sports.any(sport))
-    rows = (await db.execute(query.order_by(distance))).all()
-    salt = now.strftime("%Y%m%d%H")
-    blips = [Blip(lat=p[0], lng=p[1]) for p in (fuzz_point(uid, blat, blng, salt=salt) for uid, blat, blng in rows)]
-    return BenchNearby(count=len(rows), blips=blips[:MAX_BLIPS])
+    cells = []
+    for uid, blat, blng in (await db.execute(query)).all():
+        clat, clng = snap(blat, blng)
+        d = haversine_km(lat, lng, clat, clng)
+        if d <= radius_km:
+            cells.append((d, str(uid), uid, clat, clng))
+    cells.sort()
+    count = bucket_count(len(cells))
+    salt = f"bench:{to_ist(now).date().isoformat()}"
+    blips = [Blip(lat=p[0], lng=p[1]) for p in (fuzz_point(uid, clat, clng, salt=salt, radius_m=CELL_BLIP_FUZZ_M)
+                                                for _, _, uid, clat, clng in cells[:min(count, MAX_BLIPS)])]
+    return BenchNearby(count=count, blips=blips)
 
 
 # ───────────────────────────── SOS read models ─────────────────────────────
@@ -454,6 +506,7 @@ async def create_or_merge_sos(
     else:
         if existing is not None:
             existing.status = "expired"
+        pct = await platform.get_setting("sub_discount_pct", db)
         sos = SOSRequest(
             id=uuid.uuid4(),
             lobby_id=lobby.id,
@@ -461,9 +514,9 @@ async def create_or_merge_sos(
             reason=reason,
             spots_needed=spots,
             spots_filled=0,
-            discount_pct=settings.sub_discount_pct,
+            discount_pct=pct,
             original_share_paise=lobby.share_paise,
-            discounted_share_paise=lobby.share_paise - discount_for(lobby.share_paise),
+            discounted_share_paise=lobby.share_paise - discount_for(lobby.share_paise, pct),
             status="open",
             expires_at=lobby.start_at,
             created_at=now,
@@ -490,7 +543,9 @@ async def _post(db: AsyncSession, lobby_id: uuid.UUID, body: str) -> None:
 def _bench_phrase(n: int) -> str:
     if n == 0:
         return "SOS is live — no one on the bench nearby yet, share the invite link too"
-    return f"SOS sent to {n} player{'s' if n != 1 else ''} on the bench"
+    # same buckets as the radar (exact up to NEARBY_EXACT_UPTO): exact counts would reveal who's benched nearby
+    label = f"{bucket_count(n)}+ players" if n > NEARBY_EXACT_UPTO else f"{n} player{'s' if n != 1 else ''}"
+    return f"SOS sent to {label} on the bench"
 
 
 async def create_manual_sos(db: AsyncSession, user: User, body: CreateSOSRequest) -> SOSRequestOut:
@@ -591,7 +646,7 @@ async def on_member_dropped(
 ) -> SOSRequest | None:
     if not was_paid or hours_to_kickoff is None or hours_to_kickoff <= 0:
         return None
-    if hours_to_kickoff > settings.sos_window_hours:
+    if hours_to_kickoff > await platform.get_setting("sos_window_hours", db):
         return None
     lobby = await db.get(Lobby, lobby_id)
     if lobby is None or lobby.status != "confirmed" or lobby.start_at <= utcnow():

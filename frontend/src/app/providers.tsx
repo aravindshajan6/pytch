@@ -6,6 +6,7 @@ import { PageLoader } from '@/components/ui/States'
 import { ApiError } from '@/lib/api/client'
 import { useApplyTheme, useResolvedTheme } from '@/stores/theme'
 import { RealtimeProvider } from './RealtimeProvider'
+import { SuspendedScreen } from './SuspendedScreen'
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -26,6 +27,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <RealtimeProvider>
           <Suspense fallback={<PageLoader />}>{children}</Suspense>
         </RealtimeProvider>
+        <SuspendedScreen />
         <Toaster
           theme={theme}
           position="top-center"

@@ -6,14 +6,50 @@ Imports only models + wallet so both `lobbies.service` and `payments.service` ca
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.timeutils import utcnow
+from app.modules.coupons import service as coupons
 from app.modules.payments.models import Payment
 from app.modules.wallet import service as wallet
 
 CREDITS_RETURNED = "credits_returned"
+
+
+async def paid_discounts(
+    db: AsyncSession, lobby_id: uuid.UUID, *, member_ids: Sequence[uuid.UUID] | None = None
+) -> dict[uuid.UUID, int]:
+    """Coupon discounts on captured payments, per member. Seats are credited the gross share, so
+    refunds must subtract what the payer never actually paid."""
+    stmt = (
+        select(Payment.member_id, func.coalesce(func.sum(Payment.discount_paise), 0))
+        .where(Payment.lobby_id == lobby_id, Payment.status == "paid", Payment.discount_paise > 0,
+               Payment.member_id.is_not(None))
+        .group_by(Payment.member_id)
+    )
+    if member_ids is not None:
+        if not member_ids:
+            return {}
+        stmt = stmt.where(Payment.member_id.in_(member_ids))
+    await db.flush()
+    return {mid: int(total) for mid, total in (await db.execute(stmt)).all()}
+
+
+async def release_coupons(
+    db: AsyncSession, lobby_id: uuid.UUID, *, member_ids: Sequence[uuid.UUID] | None = None
+) -> None:
+    """Give back the coupon uses of a lobby's live payments *before* any wallet movement, so the lock
+    order stays coupon → wallet user everywhere (same as redemption). Idempotent."""
+    stmt = select(Payment.id).where(Payment.lobby_id == lobby_id, Payment.status.in_(("paid", "created")),
+                                    Payment.coupon_id.is_not(None))
+    if member_ids is not None:
+        if not member_ids:
+            return
+        stmt = stmt.where(Payment.member_id.in_(member_ids))
+    await db.flush()
+    for payment_id in (await db.scalars(stmt.order_by(Payment.id))).all():
+        await coupons.reverse_for_payment(db, payment_id)
 
 
 async def return_applied_credits(db: AsyncSession, payment: Payment, note: str) -> int:
@@ -47,6 +83,8 @@ async def cancel_pending_payments(
     for payment in payments:
         payment.status = "cancelled"
         payment.failure_reason = reason[:255]
+        if payment.coupon_id is not None:
+            await coupons.reverse_for_payment(db, payment.id)
         await return_applied_credits(db, payment, "Credits returned — payment not completed")
     return len(payments)
 
@@ -54,10 +92,17 @@ async def cancel_pending_payments(
 async def mark_lobby_payments_refunded(
     db: AsyncSession, lobby_id: uuid.UUID, *, member_ids: Sequence[uuid.UUID] | None = None
 ) -> None:
-    """History only: captured payments whose money went back to the payer as credits."""
+    """History only: captured payments whose money went back to the payer as credits
+    (their coupon redemptions are reversed — a cancellation before play restores the use)."""
     stmt = update(Payment).where(Payment.lobby_id == lobby_id, Payment.status == "paid")
+    with_coupon = select(Payment.id).where(Payment.lobby_id == lobby_id, Payment.status == "paid",
+                                           Payment.coupon_id.is_not(None))
     if member_ids is not None:
         if not member_ids:
             return
         stmt = stmt.where(Payment.member_id.in_(member_ids))
+        with_coupon = with_coupon.where(Payment.member_id.in_(member_ids))
+    await db.flush()
+    for payment_id in (await db.scalars(with_coupon)).all():
+        await coupons.reverse_for_payment(db, payment_id)
     await db.execute(stmt.values(status="refunded", refunded_at=utcnow()))

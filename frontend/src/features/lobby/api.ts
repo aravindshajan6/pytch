@@ -45,29 +45,33 @@ const REASON_COPY: Partial<Record<LobbyUpdateReason, (name: string) => string>> 
 }
 
 /**
- * Subscribes to `lobby:<id>`: invalidates on `lobby.updated`, appends chat on `lobby.message`.
+ * Realtime for the waiting room:
+ * - `lobby:<id>` (anyone who can see the lobby): `lobby.updated` → invalidate the lobby.
+ * - `chat:<id>` (current members only — joined, paid or host; the server rejects anyone else and drops
+ *   the subscription when a member leaves or is removed): `lobby.message` → append to the chat cache.
  * `onUpdate` lets the page react (seat pop animations, celebrations).
  */
 export function useLobbyRealtime(
   id: UUID | undefined,
   meId: UUID | undefined,
-  onUpdate?: (reason: LobbyUpdateReason, actor: UserPublic | null) => void,
+  { isMember, onUpdate }: { isMember: boolean; onUpdate?: (reason: LobbyUpdateReason, actor: UserPublic | null) => void },
 ) {
   const qc = useQueryClient()
   useChannel(id ? `lobby:${id}` : null, (m) => {
-    if (!id) return
-    if (m.event === 'lobby.updated') {
-      qc.invalidateQueries({ queryKey: qk.lobby(id) })
-      qc.invalidateQueries({ queryKey: qk.lobbiesAll })
-      const { reason, actor } = m.data
-      onUpdate?.(reason, actor)
-      const copy = REASON_COPY[reason]
-      if (copy && actor?.id !== meId && (actor || reason === 'teams_balanced' || reason === 'transferred' || reason === 'sos')) {
-        toast(copy(actor?.name.split(' ')[0] ?? 'Someone'), { duration: 2600 })
-      }
-    } else if (m.event === 'lobby.message') {
-      qc.setQueryData<LobbyMessage[]>(qk.lobbyMessages(id), (old) => appendMessage(old, m.data))
+    if (!id || m.event !== 'lobby.updated') return
+    qc.invalidateQueries({ queryKey: qk.lobby(id) })
+    qc.invalidateQueries({ queryKey: qk.lobbiesAll })
+    const { reason, actor } = m.data
+    onUpdate?.(reason, actor)
+    const copy = REASON_COPY[reason]
+    if (copy && actor?.id !== meId && (actor || reason === 'teams_balanced' || reason === 'transferred' || reason === 'sos')) {
+      toast(copy(actor?.name.split(' ')[0] ?? 'Someone'), { duration: 2600 })
     }
+  })
+  useChannel(id && isMember ? `chat:${id}` : null, (m) => {
+    if (!id || m.event !== 'lobby.message') return
+    // no history loaded yet → leave it to the initial fetch (seeding the cache would mark it fresh and skip history)
+    qc.setQueryData<LobbyMessage[]>(qk.lobbyMessages(id), (old) => (old ? appendMessage(old, m.data) : old))
   })
 }
 
@@ -75,7 +79,7 @@ export function useLobbyRealtime(
 export function useJoinLobby(onJoined: (lobby: LobbyDetail) => void, onAlreadyMember?: () => void) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: UUID) => api.lobbies.join(id),
+    mutationFn: ({ id, code }: { id: UUID; code?: string }) => api.lobbies.join(id, code),
     onSuccess: (lobby) => {
       qc.setQueryData(qk.lobby(lobby.id), lobby)
       qc.invalidateQueries({ queryKey: qk.lobbiesAll })

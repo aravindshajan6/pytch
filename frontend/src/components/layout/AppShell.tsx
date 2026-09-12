@@ -12,6 +12,7 @@ import { qk } from '@/lib/api/queryKeys'
 import { cn } from '@/lib/cn'
 import { formatINR } from '@/lib/format'
 import { Logo } from './Logo'
+import { MaintenanceBanner } from './MaintenanceBanner'
 
 const NAV = [
   { to: '/app', label: 'Home', icon: Home, end: true },
@@ -130,6 +131,7 @@ export function AppShell() {
 
       {/* Top bar */}
       <header className="sticky top-0 z-30 short:static border-b border-white/6 bg-ink-900/70 backdrop-blur-xl lg:ml-64">
+        <MaintenanceBanner />
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6">
           <Logo to="/app" className="lg:invisible" wordmarkClassName="max-[359px]:hidden" />
           <div className="flex items-center gap-2">

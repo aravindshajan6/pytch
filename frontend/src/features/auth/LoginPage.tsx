@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Logo } from '@/components/layout/Logo'
+import { MaintenanceBanner } from '@/components/layout/MaintenanceBanner'
 import { HeroCanvas } from '@/components/three/HeroCanvas'
 import { Button } from '@/components/ui/Button'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
@@ -15,10 +16,12 @@ import { api } from '@/lib/api/endpoints'
 import { qk } from '@/lib/api/queryKeys'
 import { cn } from '@/lib/cn'
 import { useAuth } from '@/stores/auth'
+import { syncHomeLocation } from '@/stores/location'
 import { useResolvedTheme } from '@/stores/theme'
 import type { AuthTokens } from '@/types/api'
 import { AuthBackdrop } from './AuthBackdrop'
 import { OtpInput, type OtpInputHandle } from './OtpInput'
+import { safeInAppPath } from '@/lib/safePath'
 
 const DEMO_PHONE = '+919999900001'
 const FALLBACK_DEMO_CODE = '123456'
@@ -28,9 +31,7 @@ const formatPhone = (digits: string) => (digits.length > 5 ? `${digits.slice(0, 
 const isValidIndianMobile = (digits: string) => /^[6-9]\d{9}$/.test(digits)
 
 /** Only same-origin relative paths are allowed as a post-login destination. */
-function safeNext(next: string | null): string {
-  return next && next.startsWith('/') && !next.startsWith('//') ? next : '/app'
-}
+const safeNext = (next: string | null): string => safeInAppPath(next, '/app')
 
 type Step = 'phone' | 'otp'
 
@@ -61,6 +62,7 @@ export default function LoginPage() {
   const finish = (tokens: AuthTokens) => {
     qc.setQueryData(qk.me, tokens.user)
     useAuth.getState().setSession(tokens)
+    syncHomeLocation(tokens.user)
     const first = tokens.user.name.split(' ')[0]
     toast.success(tokens.is_new_user || !tokens.user.onboarded ? 'Welcome to PYTCH ⚽' : `Welcome back, ${first}`)
     navigate(tokens.user.onboarded ? next : `/onboarding?next=${encodeURIComponent(next)}`, { replace: true })
@@ -182,6 +184,7 @@ export default function LoginPage() {
             <ThemeToggle className="h-9 w-9 rounded-lg [&_svg]:h-[18px] [&_svg]:w-[18px]" />
           </div>
         </div>
+        <MaintenanceBanner variant="floating" className="mt-4 w-full" />
 
         <div className="flex flex-1 items-center justify-center py-10">
           <div className="w-full max-w-[26rem]">
@@ -361,6 +364,12 @@ export default function LoginPage() {
 
         <p className="text-center text-xs text-subtle">
           By continuing you agree to play fair, turn up on time and rate honestly. <ShieldCheck className="inline h-3.5 w-3.5 text-mint" />
+        </p>
+        <p className="mt-2 text-center text-xs text-subtle">
+          Own a turf?{' '}
+          <Link to="/partner/login" className="font-semibold text-muted underline-offset-2 transition hover:text-volt hover:underline">
+            Partner with Pytch
+          </Link>
         </p>
       </main>
     </div>

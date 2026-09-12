@@ -15,7 +15,8 @@ import { api } from '@/lib/api/endpoints'
 import { qk } from '@/lib/api/queryKeys'
 import { cn } from '@/lib/cn'
 import { formatDay, formatHour, formatINR, formatSlotRange } from '@/lib/format'
-import { SPORTS } from '@/lib/sports'
+import { sportInfo } from '@/lib/sports'
+import { BookingsPaused } from './BookingsPaused'
 import type { LobbyMode, Pitch, Slot, TurfDetail, Visibility } from '@/types/api'
 
 export interface BookingSheetProps {
@@ -58,6 +59,7 @@ function BookingForm({
   const meta = useMeta().data
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const paused = meta?.bookings_enabled === false
 
   const [mode, setMode] = useState<LobbyMode>('split')
   const [players, setPlayers] = useState(pitch.capacity)
@@ -75,7 +77,7 @@ function BookingForm({
   const share = shareOf(total, players)
   const splitMin = meta?.split_window_minutes ?? 30
   const fullMin = meta?.full_hold_minutes ?? 10
-  const defaultTitle = `${SPORTS[pitch.sport].label} ${pitch.format} · ${formatHour(slot.start_at)}`
+  const defaultTitle = `${sportInfo(pitch.sport).label} ${pitch.format} · ${formatHour(slot.start_at)}`
 
   const book = useMutation({
     mutationFn: () =>
@@ -106,6 +108,17 @@ function BookingForm({
         toast.error('That slot was just taken', { description: 'The grid has been refreshed — pick another time.' })
         onConflict()
         onClose()
+      } else if (isApiError(e, 'LIMIT_REACHED')) {
+        // max unpaid open bookings per host (2 split + 1 full)
+        toast.error('Too many bookings on hold', {
+          description: errorMessage(e),
+          action: { label: 'My matches', onClick: () => navigate('/app/matches') },
+        })
+      } else if (isApiError(e, 'RATE_LIMITED')) {
+        toast.error('Slow down a little', { description: 'Too many bookings in a few minutes — try again shortly.' })
+      } else if (isApiError(e, 'BOOKINGS_PAUSED')) {
+        toast.error('Bookings are paused right now', { description: 'Please try again soon.' })
+        qc.invalidateQueries({ queryKey: qk.meta }) // pick up the switch → the notice shows up front
       } else toast.error(errorMessage(e))
     },
   })
@@ -114,7 +127,7 @@ function BookingForm({
     <form
       onSubmit={(e) => {
         e.preventDefault()
-        book.mutate()
+        if (!paused) book.mutate()
       }}
       className="space-y-6"
     >
@@ -153,7 +166,7 @@ function BookingForm({
             <span className="text-xs text-muted">
               incl. you · {pitch.format} fits {pitch.capacity}
             </span>
-            <Stepper value={players} onChange={setPlayers} min={2} max={pitch.capacity + 4} />
+            <Stepper value={players} onChange={setPlayers} min={2} max={pitch.capacity + 4} label="players" />
           </div>
         </div>
         <div>
@@ -262,8 +275,11 @@ function BookingForm({
 
       {/* Sticky submit */}
       <div className="sticky bottom-[calc(-1*max(env(safe-area-inset-bottom),0.5rem))] -mx-6 -mb-6 bg-gradient-to-t from-ink-700 via-ink-700 to-transparent px-6 pt-8 pb-[calc(1.5rem+max(env(safe-area-inset-bottom),0.5rem))] lg:bottom-0 lg:pb-6">
-        <Button type="submit" block size="lg" loading={book.isPending}>
-          {mode === 'split' ? (
+        {paused && <BookingsPaused className="mb-3" />}
+        <Button type="submit" block size="lg" loading={book.isPending} disabled={paused}>
+          {paused ? (
+            <>Bookings paused</>
+          ) : mode === 'split' ? (
             <>Hold slot & open lobby · you pay {formatINR(share)}</>
           ) : (
             <>Book & pay {formatINR(total)}</>

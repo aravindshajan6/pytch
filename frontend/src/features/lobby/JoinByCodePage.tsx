@@ -163,7 +163,7 @@ function Invite({ lobby }: { lobby: LobbyDetail }) {
               size="lg"
               disabled={!lobby.eligibility.can_join}
               loading={join.isPending}
-              onClick={() => join.mutate(lobby.id)}
+              onClick={() => join.mutate({ id: lobby.id, code: lobby.code })}
             >
               <Zap className="h-5 w-5 fill-current" /> Join · {formatINR(lobby.share_paise)}
             </Button>

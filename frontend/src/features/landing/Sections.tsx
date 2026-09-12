@@ -328,10 +328,17 @@ export function LandingFooter({ onJump }: { onJump: (selector: string) => void }
         { label: 'How it works', href: '#how' },
       ],
     },
+    {
+      title: 'Venues',
+      links: [
+        { label: 'Own a turf? Partner with Pytch', to: '/partner/login' },
+        { label: 'Partner login', to: '/partner/login' },
+      ],
+    },
   ]
   return (
     <footer className="relative overflow-hidden border-t border-white/6 pt-16">
-      <div className="mx-auto grid max-w-6xl gap-12 px-5 sm:px-8 md:grid-cols-[1.5fr_1fr_1fr]">
+      <div className="mx-auto grid max-w-6xl gap-12 px-5 sm:px-8 md:grid-cols-[1.5fr_1fr_1fr_1fr]">
         <div>
           <div className="flex items-center gap-2.5">
             <LogoMark />

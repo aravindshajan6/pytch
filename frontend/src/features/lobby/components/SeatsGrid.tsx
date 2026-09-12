@@ -29,7 +29,7 @@ const TEAM_META: Record<Team, { label: string; kit: string; text: string; ring: 
   B: { label: 'Team B', kit: 'bg-electric', text: 'text-electric', ring: 'ring-electric/30' },
 }
 
-/** Live seats: paid (volt), reserved/unpaid (amber), open (dashed invite). */
+/** Live seats: paid (volt), joined-but-unpaid (amber, with the seat-hold countdown when there is one), open (dashed invite). */
 export function SeatsGrid({ lobby, meId, isHost, onKick, onInvite }: SeatsGridProps) {
   const members = [...lobby.members].sort(sortMembers)
   const empty = Math.max(0, lobby.total_spots - members.length)
@@ -45,12 +45,12 @@ export function SeatsGrid({ lobby, meId, isHost, onKick, onInvite }: SeatsGridPr
         <div>
           <h2 className="text-lg font-semibold">The squad</h2>
           <p className="text-xs text-muted">
-            {lobby.paid_spots} paid · {lobby.filled_spots - lobby.paid_spots} reserved · {lobby.spots_left} open
+            {lobby.paid_spots} paid · {lobby.filled_spots - lobby.paid_spots} not paid · {lobby.spots_left} open
           </p>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-muted">
           <Dot cls="bg-volt shadow-[0_0_8px_color-mix(in_srgb,_var(--color-volt)_calc(80%*var(--glow-strength)),_transparent)]" label="Paid" />
-          <Dot cls="bg-sun" label="Paying" />
+          <Dot cls="bg-sun" label="Not paid" />
           <Dot cls="border border-dashed border-white/30" label="Open" />
         </div>
       </div>
@@ -227,10 +227,18 @@ function Seat({
   )
 }
 
+/**
+ * Unpaid seat: the hold countdown while the server reserves it, otherwise just "Not paid yet" — the API
+ * doesn't say whether a checkout is actually in progress, so never claim "Paying…".
+ */
 function ReserveTimer({ until }: { until: string | null }) {
   const c = useCountdown(until)
-  if (!until || c.expired) return <div className="text-[10px] font-semibold text-sun">Paying…</div>
-  return <div className="font-mono text-[10px] font-semibold text-sun tabular-nums">{c.label}</div>
+  if (!until || c.expired) return <div className="text-[10px] font-semibold text-sun/90">Not paid yet</div>
+  return (
+    <div className="font-mono text-[10px] font-semibold text-sun tabular-nums" title="Seat held while they pay">
+      {c.label}
+    </div>
+  )
 }
 
 function EmptySeat({ index, onInvite, disabled }: { index: number; onInvite: () => void; disabled?: boolean }) {

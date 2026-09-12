@@ -31,12 +31,17 @@ ROUTER_MODULES = [
     "notifications",
     "gamification",
     "dev",
+    "coupons",
+    "partner",
+    "channels",
+    "admin",
 ]
 
 
-def iter_routers() -> Iterator[APIRouter]:
+def iter_routers(with_names: bool = False) -> Iterator:
     for name in ROUTER_MODULES:
-        yield importlib.import_module(f"app.modules.{name}.router").router
+        router: APIRouter = importlib.import_module(f"app.modules.{name}.router").router
+        yield (name, router) if with_names else router
 
 
 def register_event_handlers() -> None:

@@ -12,7 +12,7 @@ import { errorMessage } from '@/lib/api/client'
 import { api } from '@/lib/api/endpoints'
 import { cn } from '@/lib/cn'
 import { formatINR, formatKm, formatWhen } from '@/lib/format'
-import { SPORTS } from '@/lib/sports'
+import { sportInfo } from '@/lib/sports'
 import { useLocationStore } from '@/stores/location'
 import type { QuickMatchResponse, Sport } from '@/types/api'
 
@@ -65,7 +65,7 @@ export function QuickMatch({ sport }: { sport?: Sport }) {
               One tap. <span className="text-gradient-volt">Best game</span> for you.
             </h2>
             <p className="mt-2 text-sm text-muted">
-              We rank every open {sport ? SPORTS[sport].label.toLowerCase() : ''} lobby by kick-off, distance, skill match and how close it is to filling.
+              We rank every open {sport ? sportInfo(sport).label.toLowerCase() : ''} lobby by kick-off, distance, skill match and how close it is to filling.
             </p>
           </div>
 
@@ -123,7 +123,7 @@ export function QuickMatch({ sport }: { sport?: Sport }) {
                       ))}
                     </div>
                     <div className="mt-5 flex flex-wrap items-center gap-2">
-                      <Button loading={join.isPending} onClick={() => join.mutate(result.lobby!.id)}>
+                      <Button loading={join.isPending} onClick={() => join.mutate({ id: result.lobby!.id })}>
                         Join · {formatINR(result.lobby.share_paise)}
                       </Button>
                       <LinkButton to={`/app/lobby/${result.lobby.id}`} variant="secondary">

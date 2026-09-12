@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.core.schemas import InputSchema, Schema
 from app.modules.users.models import User
@@ -84,3 +84,11 @@ class UserUpdate(InputSchema):
     home_lng: float | None = Field(None, ge=-180, le=180)
     home_area: str | None = Field(None, max_length=80)
     onboarded: bool | None = None
+
+    @field_validator("avatar_url")
+    @classmethod
+    def _safe_avatar(cls, v: str | None) -> str | None:
+        """Only https images or our own media — no javascript:/data: URLs or plain-http trackers."""
+        if v and (not v.startswith(("https://", "/media/")) or ".." in v or "\\" in v or any(c.isspace() for c in v)):
+            raise ValueError("avatar_url must be an https:// or /media/ URL")
+        return v or None

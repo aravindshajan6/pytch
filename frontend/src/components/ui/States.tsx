@@ -1,7 +1,7 @@
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { motion } from 'motion/react'
 import { cn } from '@/lib/cn'
-import { errorMessage } from '@/lib/api/client'
+import { ApiError, errorMessage } from '@/lib/api/http'
 import { Button } from './Button'
 
 export function Skeleton({ className }: { className?: string }) {
@@ -60,6 +60,52 @@ export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () =>
       action={onRetry && <Button variant="secondary" onClick={onRetry}>Try again</Button>}
     />
   )
+}
+
+/**
+ * Why a single resource (a player, an alert, a recording…) failed to load. 404s and malformed ids
+ * (400/422) mean "there's nothing here", 403 means "not yours to see" — retrying won't change either.
+ * Everything else (offline, 5xx, rate limits) is worth a retry.
+ */
+function loadErrorKind(error: unknown): 'not_found' | 'forbidden' | 'retryable' {
+  if (!(error instanceof ApiError)) return 'retryable'
+  if (error.status === 404 || error.status === 400 || error.status === 422) return 'not_found'
+  if (error.status === 403) return 'forbidden'
+  return 'retryable'
+}
+
+interface StateCopy {
+  icon?: React.ReactNode
+  title: string
+  description?: string
+}
+
+/**
+ * Error state for a page that loads one resource: friendly not-found / no-access empty states with
+ * a way out (no pointless "Try again"), and the regular retryable `ErrorState` otherwise.
+ */
+export function ResourceErrorState({
+  error,
+  onRetry,
+  notFound,
+  forbidden,
+  action,
+}: {
+  error: unknown
+  onRetry: () => void
+  notFound: StateCopy
+  /** defaults to a generic "not available to you" */
+  forbidden?: StateCopy
+  /** the way out shown on the not-found / forbidden states */
+  action: React.ReactNode
+}) {
+  const kind = loadErrorKind(error)
+  if (kind === 'retryable') return <ErrorState error={error} onRetry={onRetry} />
+  const copy =
+    kind === 'forbidden'
+      ? (forbidden ?? { icon: '🔒', title: "This isn't available to you", description: errorMessage(error) })
+      : notFound
+  return <EmptyState icon={copy.icon} title={copy.title} description={copy.description} action={action} />
 }
 
 export function PageHeader({

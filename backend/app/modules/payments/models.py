@@ -32,6 +32,10 @@ class Payment(TimestampMixin, Base):
     provider_order_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     provider_payment_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     failure_reason: Mapped[str | None] = mapped_column(String(255))
+    coupon_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("coupons.id", ondelete="SET NULL")
+    )
+    discount_paise: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # coupon discount
     meta: Mapped[dict] = mapped_column(JSONB, default=dict)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

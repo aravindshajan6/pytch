@@ -70,7 +70,9 @@ async def test_match_completed_rewards_players_once(db, make_user):
     assert h.last_match_at == kickoff.astimezone(UTC)
     assert h.streak_weeks == 4
     assert "on_fire" in await badges_of(host.id)
-    assert "squad_leader" not in await badges_of(host.id)
+    # hosting is rewarded when the match is played: 4 → 5 hosted unlocks Squad Leader (once, despite re-emit)
+    assert h.matches_hosted == 5 and h.xp == 100 + 50
+    assert "squad_leader" in await badges_of(host.id)
 
 
 async def test_lobby_confirmed_dropout_and_sub(db, make_user):
@@ -86,7 +88,7 @@ async def test_lobby_confirmed_dropout_and_sub(db, make_user):
                    hours_to_kickoff=30.0, was_paid=True)
         await s.commit()
     h = await stats_of(host.id)
-    assert h.matches_hosted == 1 and h.xp == 50
+    assert h.matches_hosted == 0 and h.xp == 0  # confirmation alone earns nothing (SEC2-04)
     assert (await stats_of(mate.id)).dropouts == 1
 
     sub = await make_user("Super Sub")

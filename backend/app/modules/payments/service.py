@@ -1,6 +1,8 @@
 """Payments: intents (credits first), one idempotent capture path, provider callbacks.
 
-Lock order everywhere: lobby row → payment row → wallet user rows (prevents deadlocks with leave/expiry).
+Lock order everywhere: lobby row → payment row → coupon → wallet user rows (prevents deadlocks with
+leave/expiry). `create_intent` takes the payer's user row lock *before* inserting the payment (FK key-share
+then FOR UPDATE on the same row deadlocks two concurrent payments by one user).
 `create_intent` / `capture` / `fail` never commit; the use-case functions below do.
 """
 
@@ -15,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.errors import AppError, BadRequest, Conflict, NotFound
 from app.core.timeutils import utcnow
+from app.modules.coupons import service as coupons
 from app.modules.lobbies import service as lobbies
 from app.modules.lobbies.errors import AlreadyPaid, LobbyClosed, NotMember, PaymentWindowClosed
 from app.modules.lobbies.models import Lobby, LobbyMember
@@ -61,6 +64,8 @@ def _intent(payment: Payment, razorpay_options: RazorpayCheckoutOptions | None =
         purpose=payment.purpose,  # type: ignore[arg-type]
         amount_paise=payment.amount_paise,
         credits_applied_paise=payment.credits_applied_paise,
+        discount_paise=payment.discount_paise or 0,
+        coupon_code=(payment.meta or {}).get("coupon_code"),
         payable_paise=payment.payable_paise,
         lobby_id=payment.lobby_id,
         razorpay=razorpay_options,
@@ -90,19 +95,31 @@ async def create_intent(
     amount_paise: int,
     use_credits: bool,
     provider: str | None = None,
+    coupon_code: str | None = None,
 ) -> PaymentIntent:
-    """Create a payment for a lobby seat. Credits are applied first; if they cover everything the
-    payment uses provider `wallet` and is captured immediately. Caller holds the lobby lock + commits.
+    """Create a payment for a lobby seat. A coupon (optional) discounts the payer's own share, then
+    credits are applied; if they cover everything the payment uses provider `wallet` and is captured
+    immediately. `amount_paise` stays the gross seat price (the seat is credited in full — the
+    discount's funder absorbs it). Caller holds the lobby lock + commits.
 
-    Any earlier open intent for the same seat is cancelled (and its credits returned), so a seat
-    never has two live intents.
+    Any earlier open intent for the same seat is cancelled (and its credits / coupon use returned),
+    so a seat never has two live intents.
     """
     if member is not None:
         await ledger.cancel_pending_payments(db, member_ids=[member.id], reason="superseded by a new attempt")
     now = utcnow()
     await db.flush()  # credits returned by a superseded intent must count towards this one
-    credits = min(await wallet.get_balance(db, user.id), amount_paise) if use_credits else 0
-    payable = amount_paise - credits
+    coupon, discount = None, 0
+    if coupon_code and coupon_code.strip():
+        coupon, discount = await coupons.reserve(db, code=coupon_code, user_id=user.id, lobby=lobby,
+                                                 purpose=purpose, amount_paise=amount_paise)
+    net = amount_paise - discount
+    # Lock the payer's wallet row before any FK insert referencing it (payment, redemption) — see
+    # `wallet.lock_owner`. Concurrent payments by one user then serialize and each sees the real balance
+    # (lock order stays coupon → wallet user).
+    payer = await wallet.lock_owner(db, user.id)
+    credits = min(payer.wallet_balance_paise, net) if use_credits else 0
+    payable = net - credits
     chosen = "wallet" if payable == 0 else (provider or settings.payment_provider)
     payment = Payment(
         id=uuid.uuid4(),
@@ -116,12 +133,17 @@ async def create_intent(
         credits_applied_paise=credits,
         payable_paise=payable,
         status="created",
-        meta={},
+        coupon_id=coupon.id if coupon is not None else None,
+        discount_paise=discount,
+        meta={"coupon_code": coupon.code} if coupon is not None else {},
         created_at=now,
         updated_at=now,
     )
     db.add(payment)
     await db.flush()
+    if coupon is not None:
+        await coupons.record_redemption(db, coupon, user_id=user.id, payment_id=payment.id, lobby_id=lobby.id,
+                                        discount_paise=discount)
     if credits > 0:
         await wallet.debit(db, user.id, credits, f"{_PURPOSE_LABEL.get(purpose, 'Payment')} · {lobby.title}",
                            ref_type="payment", ref_id=payment.id)
@@ -187,6 +209,8 @@ async def capture(db: AsyncSession, payment: Payment, *, provider_payment_id: st
 
 async def _refund_captured(db: AsyncSession, payment: Payment, reason: str) -> None:
     """Money came in but can't be used: return all of it (credits + provider part) as credits."""
+    if payment.coupon_id is not None:
+        await coupons.reverse_for_payment(db, payment.id)
     meta = dict(payment.meta or {})
     amount = payment.payable_paise + (0 if meta.get(ledger.CREDITS_RETURNED) else payment.credits_applied_paise)
     meta[ledger.CREDITS_RETURNED] = True
@@ -213,6 +237,8 @@ async def fail(db: AsyncSession, payment: Payment, reason: str) -> Payment:
         return payment
     payment.status = "failed"
     payment.failure_reason = reason[:255]
+    if payment.coupon_id is not None:
+        await coupons.reverse_for_payment(db, payment.id)
     await ledger.return_applied_credits(db, payment, "Credits returned — payment failed")
     return payment
 
@@ -221,7 +247,8 @@ async def fail(db: AsyncSession, payment: Payment, reason: str) -> Payment:
 
 
 async def pay_for_seat(
-    db: AsyncSession, user: User, lobby_id: uuid.UUID, *, use_credits: bool, provider: str | None = None
+    db: AsyncSession, user: User, lobby_id: uuid.UUID, *, use_credits: bool, provider: str | None = None,
+    coupon_code: str | None = None,
 ) -> PaymentIntent:
     """POST /lobbies/{id}/pay — pay for *my* seat, whatever its type:
     host in full mode → `full` (booking total); sub → `sub_share` (discounted); else `share`."""
@@ -244,13 +271,17 @@ async def pay_for_seat(
     if reason:
         raise PaymentWindowClosed(reason)
     intent = await create_intent(db, user=user, lobby=lobby, member=member, purpose=purpose, amount_paise=amount,
-                                 use_credits=use_credits, provider=provider)
+                                 use_credits=use_credits, provider=provider, coupon_code=coupon_code)
     await db.commit()
     return intent
 
 
-async def cover_remaining(db: AsyncSession, user: User, lobby_id: uuid.UUID, *, use_credits: bool) -> PaymentIntent:
+async def cover_remaining(
+    db: AsyncSession, user: User, lobby_id: uuid.UUID, *, use_credits: bool, coupon_code: str | None = None
+) -> PaymentIntent:
     """POST /lobbies/{id}/cover-remaining — host pays every unpaid seat to lock a split game now."""
+    if coupon_code and coupon_code.strip():  # coupons only ever discount the payer's own seat
+        raise coupons.CouponInvalid(coupons.REASON_MESSAGES["not_applicable"], details={"reason": "not_applicable"})
     lobby = await lobbies.get_lobby(db, lobby_id, for_update=True)
     if lobby.host_id != user.id:
         raise lobbies.NotHost()
@@ -274,6 +305,24 @@ async def _owned_payment(db: AsyncSession, user: User, payment_id: uuid.UUID) ->
     if payment is None or payment.user_id != user.id:
         raise NotFound("Payment not found")
     return payment
+
+
+async def cancel_mine(db: AsyncSession, user: User, payment_id: uuid.UUID) -> PaymentOut:
+    """The payer closed checkout: cancel the open intent now so its credits and coupon use come straight
+    back (instead of staying held until a retry or the seat window ends). A late provider capture of a
+    cancelled intent is refunded to credits by `capture`, so this is always safe. Idempotent."""
+    owned = await _owned_payment(db, user, payment_id)
+    if owned.lobby_id:
+        await lobbies.get_lobby(db, owned.lobby_id, for_update=True)  # lock order: lobby → payment
+    payment = await _lock_payment(db, payment_id)
+    if payment.status == "created":
+        payment.status = "cancelled"
+        payment.failure_reason = "Checkout closed"
+        if payment.coupon_id is not None:
+            await coupons.reverse_for_payment(db, payment.id)
+        await ledger.return_applied_credits(db, payment, "Credits returned — checkout closed")
+        await db.commit()
+    return payment_out(payment)
 
 
 async def complete_mock(db: AsyncSession, user: User, payment_id: uuid.UUID, outcome: str) -> PaymentOut:

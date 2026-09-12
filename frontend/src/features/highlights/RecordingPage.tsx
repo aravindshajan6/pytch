@@ -8,7 +8,7 @@ import { Button, LinkButton } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Input, Label } from '@/components/ui/Form'
 import { SportBadge } from '@/components/ui/PlayerBits'
-import { EmptyState, ErrorState, Skeleton } from '@/components/ui/States'
+import { ResourceErrorState, Skeleton } from '@/components/ui/States'
 import { TurfArt } from '@/components/ui/TurfArt'
 import { useMe } from '@/hooks/useMe'
 import { useMeta } from '@/hooks/useMeta'
@@ -40,10 +40,14 @@ export default function RecordingPage() {
       </div>
     )
   if (q.isError || !q.data)
-    return isApiError(q.error, 'NOT_FOUND') ? (
-      <EmptyState icon="📼" title="Recording not found" action={<LinkButton to="/app/highlights?tab=recordings">My recordings</LinkButton>} />
-    ) : (
-      <ErrorState error={q.error} onRetry={() => q.refetch()} />
+    return (
+      <ResourceErrorState
+        error={q.error}
+        onRetry={() => q.refetch()}
+        notFound={{ icon: '📼', title: 'Recording not found' }}
+        forbidden={{ icon: '🔒', title: 'Not your recording', description: 'Only players from this match can open its footage.' }}
+        action={<LinkButton to="/app/highlights?tab=recordings">My recordings</LinkButton>}
+      />
     )
 
   const rec = q.data

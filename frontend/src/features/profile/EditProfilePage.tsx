@@ -14,7 +14,7 @@ import { useMe } from '@/hooks/useMe'
 import { useMeta } from '@/hooks/useMeta'
 import { errorMessage } from '@/lib/api/client'
 import { cn } from '@/lib/cn'
-import { SPORT_LIST, SPORTS } from '@/lib/sports'
+import { SPORT_LIST, sportInfo } from '@/lib/sports'
 import type { DominantFoot, PlayerProfile, SkillLevel, Sport, UserMe } from '@/types/api'
 import { useMyProfile, useUpdateProfile } from './api'
 import { PlayerCard } from './components/PlayerCard'
@@ -156,7 +156,7 @@ function EditForm({ user, profile }: { user: UserMe; profile: PlayerProfile | un
               <div className="flex flex-wrap gap-2">
                 {SPORT_LIST.map((s) => (
                   <FilterChip key={s} type="button" active={f.preferred_sports.includes(s)} aria-pressed={f.preferred_sports.includes(s)} onClick={() => toggleSport(s)}>
-                    <span>{SPORTS[s].emoji}</span> {SPORTS[s].label}
+                    <span>{sportInfo(s).emoji}</span> {sportInfo(s).label}
                   </FilterChip>
                 ))}
               </div>
@@ -184,6 +184,7 @@ function EditForm({ user, profile }: { user: UserMe; profile: PlayerProfile | un
             <div>
               <Label>Dominant foot</Label>
               <Segmented
+                aria-label="Dominant foot"
                 value={f.dominant_foot ?? 'right'}
                 onChange={(v) => set('dominant_foot', v)}
                 options={[

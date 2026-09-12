@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import { useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { LinkButton } from '@/components/ui/Button'
-import { EmptyState, ErrorState, Skeleton } from '@/components/ui/States'
+import { ResourceErrorState, Skeleton } from '@/components/ui/States'
 import { usePayFlow } from '@/features/payments/PaymentSheet'
 import { useIsDesktop } from '@/hooks/useMediaQuery'
 import { useMe } from '@/hooks/useMe'
@@ -14,6 +14,7 @@ import { errorMessage, isApiError } from '@/lib/api/client'
 import { api } from '@/lib/api/endpoints'
 import { qk } from '@/lib/api/queryKeys'
 import { formatINR, formatWhen } from '@/lib/format'
+import { cancelCutoffHours, dropoutPenaltyHours, hoursUntil, sosWindowHours, subDiscountPct, subSharePaise } from '@/lib/rules'
 import type { LobbyDetail, LobbyMember, LobbyStatus } from '@/types/api'
 import { useJoinLobby, useLobby, useLobbyRealtime } from './api'
 import { Banners } from './components/Banners'
@@ -35,16 +36,20 @@ export default function LobbyPage() {
 
   if (lobbyQ.isLoading) return <LobbySkeleton />
   if (lobbyQ.isError && !lobbyQ.data) {
-    if (isApiError(lobbyQ.error, 'NOT_FOUND') || isApiError(lobbyQ.error, 'FORBIDDEN'))
-      return (
-        <EmptyState
-          icon="🔒"
-          title="This lobby isn't available"
-          description="It may be private, or the link is wrong. Ask the host for the invite code."
-          action={<LinkButton to="/app/play">Find open matches</LinkButton>}
-        />
-      )
-    return <ErrorState error={lobbyQ.error} onRetry={() => lobbyQ.refetch()} />
+    const unavailable = {
+      icon: '🔒',
+      title: "This lobby isn't available",
+      description: 'It may be private, or the link is wrong. Ask the host for the invite code.',
+    }
+    return (
+      <ResourceErrorState
+        error={lobbyQ.error}
+        onRetry={() => lobbyQ.refetch()}
+        notFound={unavailable}
+        forbidden={unavailable}
+        action={<LinkButton to="/app/play">Find open matches</LinkButton>}
+      />
+    )
   }
   if (!lobbyQ.data) return null
   return <WaitingRoom lobby={lobbyQ.data} />
@@ -76,7 +81,7 @@ function WaitingRoom({ lobby }: { lobby: LobbyDetail }) {
   )
   const refresh = useCallback(() => qc.invalidateQueries({ queryKey: qk.lobby(lobby.id) }), [qc, lobby.id])
 
-  useLobbyRealtime(lobby.id, me?.id)
+  useLobbyRealtime(lobby.id, me?.id, { isMember: !!member })
 
   // ── Pay flow ────────────────────────────────────────────────────────────
   const openPay = useCallback(
@@ -88,7 +93,11 @@ function WaitingRoom({ lobby }: { lobby: LobbyDetail }) {
         title: hostFull ? 'Secure the pitch' : 'Pay your share',
         subtitle: `${l.title} · ${formatWhen(l.start_at)}`,
         amountPaise: amount,
-        createIntent: (useCredits) => api.lobbies.pay(l.id, useCredits),
+        // full mode: the host pays the whole booking, not a share
+        amountLabel: hostFull ? (l.booking.recording_fee_paise > 0 ? 'Full booking · pitch + camera' : 'Pitch fee · full booking') : 'Your share',
+        multiSeat: hostFull,
+        lobbyId: l.id,
+        createIntent: (useCredits, couponCode) => api.lobbies.pay(l.id, useCredits, couponCode),
         onSuccess: () => {
           refresh()
           qc.invalidateQueries({ queryKey: qk.lobbiesAll })
@@ -109,13 +118,16 @@ function WaitingRoom({ lobby }: { lobby: LobbyDetail }) {
     if (amountOwed(lobby) > 0) openPay(lobby)
   }, [lobby, params, setParams, openPay])
 
-  // ── Confirmed celebration (once per lobby) ──────────────────────────────
+  // ── Confirmed celebration (once per lobby, only for players whose seat is paid) ──
+  // An unpaid joiner of a confirmed full-mode lobby isn't "locked in" yet — they get the pay sheet,
+  // and the stamp waits until their payment lands (and the sheet has closed, see render).
   const prevStatus = useRef<LobbyStatus | null>(null)
   const [matchOn, setMatchOn] = useState(false)
+  const iPaid = lobby.my_membership?.status === 'paid'
   useEffect(() => {
     const prev = prevStatus.current
     prevStatus.current = lobby.status
-    if (lobby.status !== 'confirmed' || !lobby.my_membership) return
+    if (lobby.status !== 'confirmed' || !iPaid) return
     const key = `pytch-matchon-${lobby.id}`
     let seen = false
     try {
@@ -134,7 +146,7 @@ function WaitingRoom({ lobby }: { lobby: LobbyDetail }) {
         /* ignore */
       }
     }
-  }, [lobby.status, lobby.id, lobby.my_membership, lobby.booking.confirmed_at])
+  }, [lobby.status, lobby.id, iPaid, lobby.booking.confirmed_at])
 
   // ── Mutations ───────────────────────────────────────────────────────────
   const join = useJoinLobby(
@@ -168,18 +180,34 @@ function WaitingRoom({ lobby }: { lobby: LobbyDetail }) {
 
   const leave = () => {
     const paid = member?.status === 'paid'
-    const discount = meta?.sub_discount_pct ?? 20
-    const back = Math.round(((member?.paid_paise ?? lobby.share_paise) * (100 - discount)) / 100)
+    const paidPaise = member?.paid_paise ?? lobby.share_paise
+    const discount = subDiscountPct(meta)
+    const hours = hoursUntil(lobby.start_at)
+    // Mirrors the server: a paid dropout inside the SOS window auto-pings the bench (sub pays the discounted
+    // share); further out the seat simply reopens at the normal price. Either way the leaver is credited
+    // what the newcomer pays (capped at what they paid) — nothing is refunded at the moment of leaving.
+    const toBench = hours <= sosWindowHours(meta)
+    const subPays = Math.min(subSharePaise(lobby.share_paise, discount), paidPaise)
+    const reliability = hours <= dropoutPenaltyHours(meta) && (
+      <> Dropping out within {dropoutPenaltyHours(meta)} h of kick-off also counts against your reliability.</>
+    )
     setConfirm({
       title: 'Leave this match?',
       tone: 'danger',
       confirmLabel: 'Leave match',
       body:
         lobby.status === 'confirmed' && paid ? (
-          <>
-            The game is already locked. <b className="text-fg">Your seat goes to the bench at {discount}% off</b>; you get back what the sub pays (
-            {formatINR(back)}) as Pytch Credits once someone takes it. Late drops also count against your reliability.
-          </>
+          toBench ? (
+            <>
+              The game is already locked. <b className="text-fg">Your seat goes to the bench at {discount}% off</b>; once a sub takes it you get back what
+              they pay ({formatINR(subPays)}) as Pytch Credits.{reliability}
+            </>
+          ) : (
+            <>
+              The game is already locked, so there's no instant refund. <b className="text-fg">Your seat reopens for anyone to join</b> — when someone
+              takes it, you get back what they pay (your full {formatINR(paidPaise)} at the regular price) as Pytch Credits.{reliability}
+            </>
+          )
         ) : paid ? (
           <>Your {formatINR(member?.paid_paise ?? 0)} is refunded to Pytch Credits instantly and your seat opens up for someone else.</>
         ) : (
@@ -216,7 +244,7 @@ function WaitingRoom({ lobby }: { lobby: LobbyDetail }) {
       body: (
         <>
           The slot is released and <b className="text-fg">everyone who paid is refunded to Pytch Credits instantly</b>. Confirmed matches can't be cancelled
-          within {meta?.sos_window_hours ?? 6} h of kick-off — send an SOS to the bench instead.
+          within {cancelCutoffHours(meta)} h of kick-off.
         </>
       ),
       onConfirm: () =>
@@ -233,23 +261,31 @@ function WaitingRoom({ lobby }: { lobby: LobbyDetail }) {
         }),
     })
 
-  const cover = () =>
+  const cover = () => {
+    const unpaid = lobby.total_spots - lobby.paid_spots
     pay.start({
       title: 'Cover the remaining seats',
-      subtitle: `Lock ${lobby.title} now — ${lobby.total_spots - lobby.paid_spots} unpaid seat${lobby.total_spots - lobby.paid_spots === 1 ? '' : 's'}`,
+      subtitle: `Lock ${lobby.title} now — ${unpaid} unpaid seat${unpaid === 1 ? '' : 's'}`,
       amountPaise: remainingToCover(lobby),
+      amountLabel: `Remaining seats (${unpaid})`,
+      lobbyId: lobby.id,
+      promo: false, // coupons only discount your own seat
       createIntent: (useCredits) => api.lobbies.coverRemaining(lobby.id, useCredits),
       onSuccess: refresh,
     })
+  }
 
+  /** Resolves true when the SOS went out; errors are toasted here (the sheet stays open to retry). */
   const sos = async (spots: number) => {
     try {
       await api.bench.createSos({ lobby_id: lobby.id, spots })
       toast.success('🚨 SOS sent to the bench', { description: 'Nearby subs are being pinged right now.' })
       refresh()
+      return true
     } catch (e) {
-      toast.error(errorMessage(e))
-      throw e
+      toast.error(isApiError(e, 'LOBBY_CLOSED') ? 'SOS is only for confirmed matches that haven’t kicked off' : errorMessage(e))
+      refresh()
+      return false
     }
   }
 
@@ -262,7 +298,7 @@ function WaitingRoom({ lobby }: { lobby: LobbyDetail }) {
     lobby,
     owed,
     joining: join.isPending,
-    onJoin: () => join.mutate(lobby.id),
+    onJoin: () => join.mutate({ id: lobby.id, code: lobby.code }),
     onPay: () => openPay(lobby),
     onLeave: leave,
     onInvite: invite,
@@ -316,7 +352,7 @@ function WaitingRoom({ lobby }: { lobby: LobbyDetail }) {
       )}
 
       <DemoConsole lobby={lobby} raised={hasMobileBar} />
-      <MatchOnOverlay open={matchOn} lobby={lobby} onClose={() => setMatchOn(false)} />
+      <MatchOnOverlay open={matchOn && iPaid && !pay.open} lobby={lobby} onClose={() => setMatchOn(false)} />
       <ConfirmSheet config={confirm} onClose={() => !confirmBusy && setConfirm(null)} busy={confirmBusy} />
       {pay.sheet}
     </div>

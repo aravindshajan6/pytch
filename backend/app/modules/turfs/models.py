@@ -30,6 +30,10 @@ class Turf(TimestampMixin, Base):
     rating_avg: Mapped[float] = mapped_column(Float, default=4.5, server_default="4.5")
     rating_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    provider_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("providers.id", ondelete="SET NULL"), index=True
+    )
+    is_featured: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
 
     pitches: Mapped[list["Pitch"]] = relationship(
         back_populates="turf", order_by="Pitch.name", lazy="selectin", cascade="all, delete-orphan"
@@ -55,5 +59,7 @@ class Pitch(TimestampMixin, Base):
     price_per_hour_paise: Mapped[int] = mapped_column(Integer)
     peak_price_per_hour_paise: Mapped[int] = mapped_column(Integer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # secret token for the public iCal export feed of this pitch's occupied slots (rotatable)
+    ical_export_token: Mapped[str | None] = mapped_column(String(64), unique=True)
 
     turf: Mapped[Turf] = relationship(back_populates="pitches", lazy="joined")

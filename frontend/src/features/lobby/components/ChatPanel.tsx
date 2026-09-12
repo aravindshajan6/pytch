@@ -5,7 +5,7 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Avatar } from '@/components/ui/Avatar'
 import { Spinner } from '@/components/ui/States'
-import { errorMessage } from '@/lib/api/client'
+import { errorMessage, isApiError } from '@/lib/api/client'
 import { api } from '@/lib/api/endpoints'
 import { qk } from '@/lib/api/queryKeys'
 import { cn } from '@/lib/cn'
@@ -45,8 +45,9 @@ export function ChatPanel({ lobby, me }: { lobby: LobbyDetail; me: UserPublic | 
     onSuccess: (msg, _body, ctx) => qc.setQueryData<LobbyMessage[]>(key, (old) => appendMessage(old, msg, ctx?.tempId)),
     onError: (e, body, ctx) => {
       qc.setQueryData<LobbyMessage[]>(key, (old) => old?.filter((m) => m.id !== ctx?.tempId))
-      setText((t) => t || body)
-      toast.error(errorMessage(e))
+      setText((t) => t || body) // keep the draft
+      if (isApiError(e, 'RATE_LIMITED')) toast.error('Easy, playmaker — too many messages', { description: 'Wait a few seconds, then send it again.' })
+      else toast.error(errorMessage(e))
     },
   })
 

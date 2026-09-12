@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" class="dark" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="robots" content="noindex, nofollow, noarchive" />
+    <meta name="googlebot" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="theme-color" content="#05080a" />
+    <!-- Pre-paint theme (same file as index.html; external so the CSP can forbid inline scripts).
+         Reads only the non-sensitive theme preference — never tokens. -->
+    <script src="/theme-init.js"></script>
+    <title>PYTCH Admin</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>PYTCH Admin requires JavaScript.</noscript>
+    <script type="module" src="/src/admin/main.tsx"></script>
+  </body>
+</html>

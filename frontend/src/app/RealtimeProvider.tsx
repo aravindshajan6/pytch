@@ -5,13 +5,16 @@ import { toast } from 'sonner'
 import { qk } from '@/lib/api/queryKeys'
 import { celebrate } from '@/lib/celebrate'
 import { realtime, useRealtimeEvent } from '@/lib/realtime'
+import { isSafeInAppPath } from '@/lib/safePath'
 import { useAuth } from '@/stores/auth'
 import type { Notification } from '@/types/api'
 
 /** Where a notification should take the user when tapped. */
+export { isSafeInAppPath }
+
 export function notificationHref(n: Pick<Notification, 'type' | 'data'>): string | null {
   const d = n.data as Record<string, string | undefined>
-  if (d.url) return d.url
+  if (d.url) return isSafeInAppPath(d.url) ? d.url : null
   if (n.type === 'sos') return '/app/bench'
   if (n.type === 'rating_request' && d.lobby_id) return `/app/rate/${d.lobby_id}`
   if (n.type === 'weather_alert' && d.alert_id) return `/app/weather/${d.alert_id}`

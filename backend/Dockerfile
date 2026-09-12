@@ -23,4 +23,5 @@ USER pytch
 EXPOSE 8000
 
 ENTRYPOINT ["scripts/entrypoint.sh"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# No `--forwarded-allow-ips *`: forwarding headers are trusted only from the proxy (see TRUSTED_PROXY_CIDRS).
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]

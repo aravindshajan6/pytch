@@ -4,11 +4,10 @@ import { Navigate, useNavigate, useParams } from 'react-router'
 import { LinkButton } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { SportBadge, TierBadge, VerifiedBadge } from '@/components/ui/PlayerBits'
-import { EmptyState, ErrorState, Skeleton, Stat } from '@/components/ui/States'
+import { EmptyState, ResourceErrorState, Skeleton, Stat } from '@/components/ui/States'
 import { ClipCard } from '@/features/highlights/components/ClipCard'
 import { useUserClips } from '@/features/highlights/api'
 import { useMe } from '@/hooks/useMe'
-import { isApiError } from '@/lib/api/client'
 import { formatDateLong } from '@/lib/format'
 import { usePlayerProfile } from './api'
 import { BadgesGrid } from './components/BadgesGrid'
@@ -38,10 +37,14 @@ export default function PlayerPage() {
       </div>
     )
   if (profile.isError || !profile.data)
-    return isApiError(profile.error, 'NOT_FOUND') ? (
-      <EmptyState icon="🕵️" title="Player not found" description="This player may have left the pitch." action={<LinkButton to="/app">Home</LinkButton>} />
-    ) : (
-      <ErrorState error={profile.error} onRetry={() => profile.refetch()} />
+    return (
+      <ResourceErrorState
+        error={profile.error}
+        onRetry={() => profile.refetch()}
+        notFound={{ icon: '🕵️', title: 'Player not found', description: 'This player may have left the pitch — or the link is wrong.' }}
+        forbidden={{ icon: '🔒', title: 'This profile is private', description: "You can't view this player right now." }}
+        action={<LinkButton to="/app">Home</LinkButton>}
+      />
     )
 
   const p = profile.data

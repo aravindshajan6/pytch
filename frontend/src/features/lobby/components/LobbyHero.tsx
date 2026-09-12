@@ -104,6 +104,7 @@ function SplitHero({ lobby, onDeadline }: { lobby: LobbyDetail; onDeadline: () =
 
 function FullPendingHero({ lobby, onDeadline }: { lobby: LobbyDetail; onDeadline: () => void }) {
   const pending = lobby.booking.status === 'pending_payment'
+  const isHost = lobby.my_membership?.role === 'host'
   return (
     <Shell tone="electric">
       <div className="flex flex-col items-center gap-6 sm:flex-row sm:gap-10">
@@ -111,34 +112,20 @@ function FullPendingHero({ lobby, onDeadline }: { lobby: LobbyDetail; onDeadline
         <div className="flex-1 text-center sm:text-left">
           {pending ? (
             <>
-              <div className="text-xs font-bold tracking-[0.2em] text-electric uppercase">Host is securing the pitch</div>
+              <div className="text-xs font-bold tracking-[0.2em] text-electric uppercase">{isHost ? 'Slot held for you' : 'Host is securing the pitch'}</div>
               <Countdown to={lobby.booking.expires_at} onExpire={onDeadline} className="mt-1 font-display text-5xl leading-none font-bold sm:text-6xl" />
               <p className="mt-4 max-w-md text-sm text-muted">
-                The host pays the full {formatINR(lobby.booking.total_paise)} to lock the slot. Everyone who joins pays {formatINR(lobby.share_paise)} straight back to them.
+                {isHost
+                  ? `Pay the full ${formatINR(lobby.booking.total_paise)} to lock the slot — everyone who joins pays ${formatINR(lobby.share_paise)} straight back to you.`
+                  : `The host pays the full ${formatINR(lobby.booking.total_paise)} to lock the slot. Everyone who joins pays ${formatINR(lobby.share_paise)} straight back to them.`}
               </p>
             </>
           ) : (
-            <FullCopy lobby={lobby} />
+            <ConfirmedOpenCopy lobby={lobby} />
           )}
         </div>
       </div>
     </Shell>
-  )
-}
-
-function FullCopy({ lobby }: { lobby: LobbyDetail }) {
-  return (
-    <>
-      <div className="flex items-center justify-center gap-2 text-xs font-bold tracking-[0.2em] text-electric uppercase sm:justify-start">
-        <ShieldCheck className="h-4 w-4" /> Pitch secured
-      </div>
-      <h2 className="mt-2 text-2xl font-bold sm:text-3xl">
-        Join for <span className="text-gradient-volt">{formatINR(lobby.share_paise)}</span>
-      </h2>
-      <p className="mt-2 max-w-md text-sm text-muted">
-        Host has secured the pitch — join for {formatINR(lobby.share_paise)}, it auto-reimburses the host. No UPI requests, no awkward reminders.
-      </p>
-    </>
   )
 }
 
@@ -169,24 +156,78 @@ function FillRing({ lobby, done }: { lobby: LobbyDetail; done?: boolean }) {
   )
 }
 
+const seats = (n: number) => `${n} seat${n === 1 ? '' : 's'}`
+
+/**
+ * Confirmed but not every seat paid: full mode keeps filling after the host locked the pitch, and a
+ * split match can reopen a seat after a dropout. Copy depends on who's looking.
+ */
+function ConfirmedOpenCopy({ lobby }: { lobby: LobbyDetail }) {
+  const me = lobby.my_membership
+  const open = lobby.spots_left
+  const unpaid = lobby.filled_spots - lobby.paid_spots
+  const share = formatINR(lobby.share_paise)
+  const full = lobby.mode === 'full'
+  // the ring beside this already shows "x/y players in"; split mode adds what the ring doesn't: who has paid
+  const eyebrow = full ? 'Pitch secured' : `Match on · ${lobby.paid_spots}/${lobby.total_spots} paid`
+
+  let title: React.ReactNode
+  let body: React.ReactNode
+  if (!me) {
+    title = (
+      <>
+        Join for <span className="text-gradient-volt">{share}</span>
+      </>
+    )
+    body = full
+      ? `Host has secured the pitch — join for ${share}, it auto-reimburses the host. No UPI requests, no awkward reminders.`
+      : `A seat just opened up in this locked-in match. Join for ${share} and you're playing.`
+  } else if (me.role === 'host') {
+    title = full ? "You've locked the pitch" : 'A seat opened up'
+    const fill = open > 0 ? `${seats(open)} still open — share the invite${lobby.open_sos ? '' : ' or SOS the bench'} to fill up.` : ''
+    const waiting = unpaid > 0 ? ` Waiting on ${unpaid} player${unpaid === 1 ? '' : 's'} to pay.` : ''
+    body = full ? `Every player who joins pays ${share} straight back to you as Pytch Credits. ${fill}${waiting}` : `${fill}${waiting}`
+  } else if (me.status === 'paid') {
+    title = <span className="text-gradient-volt">MATCH ON</span>
+    body = open > 0 ? `You're locked in. ${seats(open)} still open — know someone who'd play?` : `You're locked in. Waiting on ${unpaid} more to pay.`
+  } else {
+    title = (
+      <>
+        Pay <span className="text-gradient-volt">{share}</span> to lock your seat
+      </>
+    )
+    body = full ? 'The host has secured the pitch — your share goes straight back to them.' : 'The match is on — your seat is held while you pay.'
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-center gap-2 text-xs font-bold tracking-[0.2em] text-volt uppercase sm:justify-start">
+        {full && <ShieldCheck className="h-4 w-4" />} {eyebrow}
+      </div>
+      <h2 className="mt-2 text-2xl font-bold sm:text-3xl">{title}</h2>
+      <p className="mt-2 max-w-md text-sm text-muted">{body}</p>
+    </>
+  )
+}
+
 function ConfirmedHero({ lobby }: { lobby: LobbyDetail }) {
   const c = useCountdown(lobby.start_at)
   const soon = c.totalMs > 0 && c.totalMs < 48 * 3600 * 1000
-  const openSeats = lobby.mode === 'full' && lobby.spots_left > 0
+  const fullyPaid = lobby.paid_spots >= lobby.total_spots
   return (
     <Shell tone="volt">
       <div className="flex flex-col items-center gap-6 sm:flex-row sm:gap-10">
-        <FillRing lobby={lobby} done={!openSeats} />
+        <FillRing lobby={lobby} done={fullyPaid} />
         <div className="flex-1 text-center sm:text-left">
-          {openSeats ? (
-            <FullCopy lobby={lobby} />
-          ) : (
+          {fullyPaid ? (
             <>
               <div className="text-xs font-bold tracking-[0.2em] text-volt uppercase">Match on · fully paid</div>
               <h2 className="mt-1 text-4xl font-black tracking-tight sm:text-5xl">
                 <span className="text-gradient-volt">MATCH ON</span>
               </h2>
             </>
+          ) : (
+            <ConfirmedOpenCopy lobby={lobby} />
           )}
           <div className="mt-4">
             <div className="text-[11px] font-semibold tracking-wider text-muted uppercase">{c.expired ? 'Kicked off' : 'Kick-off in'}</div>

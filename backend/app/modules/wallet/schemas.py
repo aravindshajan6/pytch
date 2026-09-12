@@ -4,7 +4,7 @@ from typing import Literal
 
 from app.core.schemas import Schema
 
-WalletTxnKind = Literal["refund", "rain_check", "reimbursement", "dropout_credit", "spend", "bonus"]
+WalletTxnKind = Literal["refund", "rain_check", "reimbursement", "dropout_credit", "spend", "bonus", "adjustment"]
 
 
 class WalletTxnOut(Schema):
@@ -20,4 +20,6 @@ class WalletTxnOut(Schema):
 
 class WalletOut(Schema):
     balance_paise: int
+    total_credited_paise: int  # lifetime, excluding credits held by checkouts that never completed
+    total_spent_paise: int
     transactions: list[WalletTxnOut]

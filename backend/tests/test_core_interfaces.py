@@ -75,10 +75,9 @@ async def test_rain_check_cancel_with_bonus(client, db, make_user):
 
 
 async def test_lobby_summaries_batch(client, db, make_user):
-    host = await make_user("Host")
     _, pitch = await make_venue(db)
-    for h in (20, 21, 22):
-        await book(client, host, await make_slot(db, pitch, hours_ahead=h), total_spots=4)
+    for h in (20, 21, 22):  # one host each: a host may hold only 2 unpaid split lobbies at once
+        await book(client, await make_user("Host"), await make_slot(db, pitch, hours_ahead=h), total_spots=4)
     db.expunge_all()
     rows = (await db.execute(select(Lobby).order_by(Lobby.start_at))).unique().scalars().all()
     summaries = await lobbies.lobby_summaries(db, rows, lat=9.98, lng=76.30)
@@ -86,8 +85,11 @@ async def test_lobby_summaries_batch(client, db, make_user):
     assert all(s.distance_km is not None and s.host.name == "Host" for s in summaries)
 
 
-async def test_list_endpoints_have_constant_query_count(client, db, make_user):
+async def test_list_endpoints_have_constant_query_count(client, db, make_user, monkeypatch):
     """Feed / mine / turf list issue the same number of queries for 2 or 6 rows (no N+1)."""
+    from app.modules.bookings import service as bookings_service
+
+    monkeypatch.setitem(bookings_service.MAX_FORMING, "split", 10)  # one host, many open lobbies
     host, viewer = await make_user("Host"), await make_user("Viewer")
     _, pitch = await make_venue(db)
     others = [await make_user(f"P{i}") for i in range(6)]

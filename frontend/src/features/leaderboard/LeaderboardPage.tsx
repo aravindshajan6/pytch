@@ -33,6 +33,9 @@ export default function LeaderboardPage() {
   const { user } = useMe()
   const [metric, setMetric] = useState<Metric>('xp')
   const [period, setPeriod] = useState<Period>('week')
+  // XP "this week" = XP earned in the last 7 days. True Skill is a rating, not a tally: "this week" there
+  // means "players rated in the last 7 days", ranked by their current score — so label it that way.
+  const skill = metric === 'true_skill'
 
   const board = useQuery({
     queryKey: qk.leaderboard(metric, period),
@@ -55,11 +58,20 @@ export default function LeaderboardPage() {
       <PageHeader
         eyebrow="Kochi"
         title="Leaderboard"
-        subtitle={metric === 'xp' ? 'XP from playing, hosting, subbing and rating your squad.' : 'Peer-verified True Skill — earned on the pitch.'}
+        subtitle={
+          !skill
+            ? period === 'week'
+              ? 'XP earned in the last 7 days — playing, hosting, subbing and rating your squad.'
+              : 'Lifetime XP from playing, hosting, subbing and rating your squad.'
+            : period === 'week'
+              ? 'Peer-verified True Skill of players rated in the last 7 days.'
+              : 'Peer-verified True Skill — everyone with 3+ ratings.'
+        }
       />
 
       <div className="mb-8 flex flex-wrap items-center gap-3">
         <Segmented<Metric>
+          aria-label="Rank by"
           value={metric}
           onChange={setMetric}
           className="[&_button]:whitespace-nowrap"
@@ -69,12 +81,13 @@ export default function LeaderboardPage() {
           ]}
         />
         <Segmented<Period>
+          aria-label="Period"
           value={period}
           onChange={setPeriod}
           size="sm"
           className="[&_button]:whitespace-nowrap"
           options={[
-            { value: 'week', label: 'This week' },
+            { value: 'week', label: skill ? 'Rated this week' : 'This week' },
             { value: 'all', label: 'All time' },
           ]}
         />
@@ -89,7 +102,13 @@ export default function LeaderboardPage() {
         <EmptyState
           icon="🏆"
           title="The board is wide open"
-          description={period === 'week' ? 'Nobody has scored yet this week. Play one game and #1 is yours.' : 'No rankings yet — be the first on the board.'}
+          description={
+            period === 'week'
+              ? skill
+                ? 'Nobody has been rated this week yet. Play, get rated, climb.'
+                : 'Nobody has scored yet this week. Play one game and #1 is yours.'
+              : 'No rankings yet — be the first on the board.'
+          }
           action={<LinkButton to="/app/play">Find a game</LinkButton>}
         />
       ) : (

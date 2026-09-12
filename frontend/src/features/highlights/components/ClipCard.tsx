@@ -11,7 +11,7 @@ import { errorMessage } from '@/lib/api/client'
 import { api } from '@/lib/api/endpoints'
 import { cn } from '@/lib/cn'
 import { timeAgo } from '@/lib/format'
-import { SPORTS } from '@/lib/sports'
+import { sportInfo } from '@/lib/sports'
 import type { Clip } from '@/types/api'
 import { replaceClip } from '../api'
 import { fmtClock, fmtCount } from '../time'
@@ -51,7 +51,7 @@ export function ClipCard({ clip, className, actions, autoPlay = true, hideOwner 
   const liked = like?.liked ?? clip.liked_by_me
   const likes = like?.count ?? clip.likes_count
   const duration = Math.max(0, clip.end_s - clip.start_s)
-  const sport = SPORTS[clip.sport]
+  const sport = sportInfo(clip.sport)
 
   // Autoplay while in view.
   useEffect(() => {

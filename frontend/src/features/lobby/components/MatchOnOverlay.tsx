@@ -11,6 +11,14 @@ import { downloadIcs } from '../lib'
 
 const WORDS = ['MATCH', 'ON']
 
+/** The squad status under the stamp — only ever what's true right now. */
+function squadLine(l: LobbyDetail): string {
+  if (l.paid_spots >= l.total_spots) return `${l.total_spots} players, fully paid`
+  // full mode: the host paid the whole pitch, seats keep filling after confirmation
+  if (l.mode === 'full') return `Pitch secured · ${l.filled_spots}/${l.total_spots} in`
+  return `${l.paid_spots}/${l.total_spots} paid`
+}
+
 /** Full-screen one-time celebration when a lobby flips to confirmed. */
 export function MatchOnOverlay({ open, lobby, onClose }: { open: boolean; lobby: LobbyDetail; onClose: () => void }) {
   return createPortal(
@@ -101,7 +109,7 @@ function Overlay({ lobby, onClose }: { lobby: LobbyDetail; onClose: () => void }
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.9, duration: 0.5 }} className="mt-10">
           <p className="text-lg font-semibold sm:text-xl">{lobby.title} is locked in.</p>
           <p className="mt-1 text-sm text-muted">
-            {formatWhen(lobby.start_at)} · {lobby.turf.name} · {lobby.total_spots} players, fully paid
+            {formatWhen(lobby.start_at)} · {lobby.turf.name} · {squadLine(lobby)}
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
             <Button variant="secondary" size="lg" onClick={() => downloadIcs(lobby)}>

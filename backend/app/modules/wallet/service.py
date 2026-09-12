@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError
@@ -30,6 +30,16 @@ async def _locked_user(db: AsyncSession, user_id: uuid.UUID) -> User:
     if user is None:
         raise AppError("Wallet owner not found", code="NOT_FOUND", status_code=404)
     return user
+
+
+async def lock_owner(db: AsyncSession, user_id: uuid.UUID) -> User:
+    """Row-lock (`FOR UPDATE`) a wallet owner up front and return it with a fresh balance.
+
+    Take it *before* inserting rows that reference the user (payments, redemptions): those FK inserts
+    take `FOR KEY SHARE` on the user row, and two transactions both holding KEY SHARE and then asking
+    for FOR UPDATE (the debit) deadlock. Locking first makes concurrent spends by one user serialize.
+    """
+    return await _locked_user(db, user_id)
 
 
 async def _apply(
@@ -96,6 +106,25 @@ async def debit(
 
 async def get_balance(db: AsyncSession, user_id: uuid.UUID) -> int:
     return int(await db.scalar(select(User.wallet_balance_paise).where(User.id == user_id)) or 0)
+
+
+async def lifetime_totals(db: AsyncSession, user_id: uuid.UUID) -> tuple[int, int]:
+    """(credited, spent) over the whole ledger. Credits held by a checkout that never completed (the debit
+    and its return both reference a cancelled/failed payment) are net zero and excluded from both sides."""
+    from app.modules.payments.models import Payment
+
+    abandoned = select(Payment.id).where(Payment.status.in_(("cancelled", "failed"))).scalar_subquery()
+    counted = or_(WalletTransaction.ref_type.is_distinct_from("payment"), WalletTransaction.ref_id.not_in(abandoned))
+    credited, spent = (await db.execute(
+        select(
+            func.coalesce(func.sum(case((WalletTransaction.amount_paise > 0, WalletTransaction.amount_paise))), 0),
+            # an admin deduction ("adjustment") isn't spending
+            func.coalesce(func.sum(case(
+                ((WalletTransaction.amount_paise < 0) & (WalletTransaction.kind != "adjustment"),
+                 -WalletTransaction.amount_paise))), 0),
+        ).where(WalletTransaction.user_id == user_id, counted)
+    )).one()
+    return int(credited), int(spent)
 
 
 async def recent_transactions(db: AsyncSession, user_id: uuid.UUID, limit: int = 50) -> list[WalletTransaction]:

@@ -55,10 +55,10 @@ def next_streak(stats: PlayerStats, kickoff) -> int:
     return 1
 
 
-@on("lobby.confirmed")
-async def reward_host(db: AsyncSession, *, lobby_id: uuid.UUID, **_: object) -> None:
-    lobby = await db.get(Lobby, lobby_id)
-    if lobby is None or await _already_rewarded(db, lobby.host_id, lobby.id, HOSTED_PREFIX):
+async def reward_host(db: AsyncSession, lobby: Lobby) -> None:
+    """Hosting XP / `matches_hosted` / Squad Leader — earned when the match is actually played
+    (`match.completed`), not on confirmation, so a confirm → cancel (full refund) loop earns nothing."""
+    if await _already_rewarded(db, lobby.host_id, lobby.id, HOSTED_PREFIX):
         return
     stats = await get_stats_for_update(db, lobby.host_id)
     stats.matches_hosted = (stats.matches_hosted or 0) + 1
@@ -70,10 +70,12 @@ async def reward_host(db: AsyncSession, *, lobby_id: uuid.UUID, **_: object) -> 
 @on("match.completed")
 async def reward_players(db: AsyncSession, *, lobby_id: uuid.UUID, **_: object) -> None:
     lobby = await db.get(Lobby, lobby_id)
-    if lobby is None:
+    if lobby is None or lobby.status != "completed":
         return
+    await reward_host(db, lobby)
     kickoff = lobby.start_at
     hour_ist = to_ist(kickoff).hour
+    rescued = lobby.booking is not None and lobby.booking.transferred_from_id is not None  # moved indoors
     for user_id in sorted({m.user_id for m in lobby.members if m.status == "paid"}):
         if await _already_rewarded(db, user_id, lobby.id, PLAYED_PREFIX):
             continue
@@ -95,6 +97,8 @@ async def reward_players(db: AsyncSession, *, lobby_id: uuid.UUID, **_: object) 
             await award_badge(db, user_id, "early_bird")
         if stats.streak_weeks >= ON_FIRE_STREAK:
             await award_badge(db, user_id, "on_fire")
+        if rescued:  # "Play a match rescued from the rain" — earned by playing it, not by the transfer
+            await award_badge(db, user_id, "rain_dancer")
 
 
 @on("member.dropped")

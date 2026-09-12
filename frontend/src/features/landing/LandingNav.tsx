@@ -2,6 +2,7 @@ import { ArrowRight } from 'lucide-react'
 import { motion, useMotionValueEvent, useScroll, useSpring } from 'motion/react'
 import { useState } from 'react'
 import { Logo } from '@/components/layout/Logo'
+import { MaintenanceBanner } from '@/components/layout/MaintenanceBanner'
 import { LinkButton } from '@/components/ui/Button'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
 import { cn } from '@/lib/cn'
@@ -32,10 +33,11 @@ export function LandingNav({ onJump }: { onJump: (selector: string) => void }) {
     <>
     <motion.header
       initial={{ y: -80, opacity: 0 }}
-      animate={{ y: hidden ? -80 : 0, opacity: 1 }}
+      animate={{ y: hidden ? '-120%' : 0, opacity: 1 }}
       transition={{ type: 'spring', stiffness: 260, damping: 30 }}
       className="fixed inset-x-0 top-0 z-50"
     >
+      <MaintenanceBanner variant="floating" className="mx-3 mt-3 sm:mx-6 xl:mx-auto xl:max-w-6xl" />
       <div
         className={cn(
           'mx-auto mt-3 flex h-14 max-w-6xl items-center justify-between gap-4 rounded-2xl px-4 transition-[background,box-shadow,border-color] duration-500 sm:px-5',

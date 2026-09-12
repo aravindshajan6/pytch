@@ -33,9 +33,17 @@ from app.modules.users.models import PlayerStats, User  # noqa: E402
 @pytest.fixture(scope="session", autouse=True)
 async def _schema() -> AsyncIterator[None]:
     register_event_handlers()
+    from sqlalchemy import text as sql_text
+
+    from app.modules.audit.models import AUDIT_APPEND_ONLY_DDL
+
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+        # rebuild from scratch (robust to schema changes between runs)
+        await conn.execute(sql_text("DROP SCHEMA public CASCADE"))
+        await conn.execute(sql_text("CREATE SCHEMA public"))
         await conn.run_sync(Base.metadata.create_all)
+        for ddl in AUDIT_APPEND_ONLY_DDL:
+            await conn.execute(sql_text(ddl))
     yield
     await engine.dispose()
 
@@ -80,4 +88,4 @@ def make_user(db):
 
 
 def auth_headers(user: User) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_token(user.id, 'access')}"}
+    return {"Authorization": f"Bearer {create_token(user.id, 'access', session_id=uuid.uuid4())}"}

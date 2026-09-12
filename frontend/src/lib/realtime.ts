@@ -8,10 +8,11 @@ import type { ServerWsMessage, WsEventMap, WsEventName } from '@/types/api'
 type AnyEvent = Extract<ServerWsMessage, { type: 'event' }>
 type Listener = (msg: AnyEvent) => void
 
-function wsUrl(token: string) {
-  const explicit = import.meta.env.VITE_WS_URL
-  const base = explicit ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
-  return `${base}?token=${encodeURIComponent(token)}`
+/** The access token travels as the 2nd subprotocol (never in the URL, so it can't land in access logs). */
+const SUBPROTOCOL = 'pytch.v1'
+
+function wsUrl() {
+  return import.meta.env.VITE_WS_URL ?? `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 }
 
 class RealtimeClient {
@@ -43,7 +44,7 @@ class RealtimeClient {
 
   private open() {
     if (!this.token) return
-    const ws = new WebSocket(wsUrl(this.token))
+    const ws = new WebSocket(wsUrl(), [SUBPROTOCOL, this.token])
     this.ws = ws
     ws.onopen = () => {
       this.retry = 0
@@ -64,7 +65,8 @@ class RealtimeClient {
       if (this.pingTimer) clearInterval(this.pingTimer)
       this.setConnected(false)
       if (this.ws !== ws || !this.token || e.code === 4401) return
-      const delay = Math.min(1000 * 2 ** this.retry++, 15000) + Math.random() * 500
+      // 4429 = too many sockets / messages for this account: back off for a minute instead of hammering
+      const delay = e.code === 4429 ? 60000 : Math.min(1000 * 2 ** this.retry++, 15000) + Math.random() * 500
       this.reconnectTimer = setTimeout(() => this.open(), delay)
     }
   }

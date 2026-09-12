@@ -12,7 +12,10 @@ Money flows (all refunds are Pytch Credits):
 - confirmed full mode (or split after "cover remaining"): each seat payment reimburses the host
   (`reimbursement`), capped at what the host fronted.
 - confirmed + a paid member drops out → no refund; whoever later pays for a seat credits the earliest
-  uncompensated dropout exactly what they paid (`dropout_credit`, the 20 % sub discount is the penalty).
+  uncompensated dropout what they paid net of coupons, capped at what the dropout paid net of coupons
+  (`dropout_credit`, the 20 % sub discount is the penalty; coupon value never becomes credits).
+- rain bonus (cancel with `bonus_paise`): only paid non-host members, only when ≥ 2 distinct players
+  paid, at most `RAIN_BONUS_DAILY_CAP` per player per IST day.
 """
 
 import importlib
@@ -35,7 +38,9 @@ from app.core.events import emit
 from app.core.geo import haversine_km, haversine_sql
 from app.core.logging import logger
 from app.core.pagination import Page
-from app.core.timeutils import ist_day_bounds, to_ist, utcnow
+from app.core.ratelimit import enforce
+from app.core.redis import get_redis
+from app.core.timeutils import ist_day_bounds, ist_today, to_ist, utcnow
 from app.modules.bench.models import SOSDispatch, SOSRequest
 from app.modules.bookings.models import Booking
 from app.modules.bookings.schemas import BookingOut
@@ -69,11 +74,16 @@ from app.modules.users.models import User
 from app.modules.users.schemas import UserPublic
 from app.modules.wallet import service as wallet
 from app.modules.wallet.models import WalletTransaction
-from app.realtime.publisher import lobby_channel, publish_on_commit
+from app.realtime.publisher import chat_channel, lobby_channel, publish_on_commit, unsubscribe_on_commit
 
 ACTIVE = ACTIVE_MEMBER_STATUSES
 DEFAULT_SKILL = 50.0
 QUICK_MATCH_HORIZON = timedelta(days=7)
+RAIN_BONUS_DAILY_CAP = 2  # rain bonuses a player can receive per IST day
+CHAT_BURST = (10, 10)  # messages per seconds, per user (all lobbies)
+CHAT_SUSTAINED = (60, 600)
+INVITE_GRANT_TTL = 7 * 24 * 3600  # opening a private lobby by its code lets you join it by id for a week
+_INVITE_KEY = "pytch:lobby-invite:{lobby_id}:{user_id}"
 
 __all__ = [
     "active_members",
@@ -174,6 +184,32 @@ async def get_lobby_by_code(db: AsyncSession, code: str) -> Lobby:
     if lobby is None:
         raise NotFound("No match with that code")
     return lobby
+
+
+def _invite_key(lobby_id: uuid.UUID, user_id: uuid.UUID) -> str:
+    return _INVITE_KEY.format(lobby_id=lobby_id, user_id=user_id)
+
+
+async def open_by_code(db: AsyncSession, code: str, viewer: User) -> Lobby:
+    """GET /lobbies/code/{code}: knowing the invite code lets the viewer join that (private) lobby by id
+    for INVITE_GRANT_TTL — the invite link opens this page and then calls POST /lobbies/{id}/join."""
+    lobby = await get_lobby_by_code(db, code)
+    if lobby.visibility != "public":
+        await get_redis().set(_invite_key(lobby.id, viewer.id), "1", ex=INVITE_GRANT_TTL)
+    return lobby
+
+
+async def _may_join_private(db: AsyncSession, lobby: Lobby, user: User, code: str | None) -> bool:
+    """Private lobbies: the invite code (in the request or opened via /code/{code}), an SOS dispatch, or a
+    former member who left on their own. Members removed by the host need the code again."""
+    if code and code.strip().upper() == lobby.code:
+        return True
+    if await get_redis().exists(_invite_key(lobby.id, user.id)):
+        return True
+    member = find_member(lobby, user.id)
+    if member is not None and member.status == "left":
+        return True
+    return await _has_open_sos_dispatch(db, lobby.id, user.id)
 
 
 async def _ensure_loaded(db: AsyncSession, lobbies: Sequence[Lobby]) -> None:
@@ -429,9 +465,16 @@ async def _has_open_sos_dispatch(db: AsyncSession, lobby_id: uuid.UUID, user_id:
 
 
 async def get_visible_lobby(db: AsyncSession, lobby_id: uuid.UUID, viewer: User) -> Lobby:
-    """Private lobbies are visible to (former) members, SOS recipients, or via the invite code."""
+    """Private lobbies are visible to members and players who left on their own (their history), SOS
+    recipients, and holders of the invite code (opened via /code/{code}). Players removed by the host are not
+    — like rejoining, seeing it again needs the code."""
     lobby = await get_lobby(db, lobby_id)
-    if lobby.visibility == "public" or lobby.host_id == viewer.id or find_member(lobby, viewer.id):
+    if lobby.visibility == "public" or lobby.host_id == viewer.id:
+        return lobby
+    member = find_member(lobby, viewer.id)
+    if member is not None and member.status != "removed":
+        return lobby
+    if await get_redis().exists(_invite_key(lobby.id, viewer.id)):
         return lobby
     if await _has_open_sos_dispatch(db, lobby.id, viewer.id):
         return lobby
@@ -449,7 +492,7 @@ async def post_system_message(db: AsyncSession, lobby_id: uuid.UUID, body: str) 
     db.add(msg)
     publish_on_commit(
         db,
-        lobby_channel(lobby_id),
+        chat_channel(lobby_id),
         "lobby.message",
         LobbyMessageOut(id=msg.id, lobby_id=lobby_id, user=None, kind="system", body=msg.body,
                         created_at=msg.created_at),
@@ -470,7 +513,11 @@ def _message_out(msg: LobbyMessage) -> LobbyMessageOut:
 async def list_messages(
     db: AsyncSession, lobby_id: uuid.UUID, viewer: User, *, before: datetime | None, limit: int
 ) -> list[LobbyMessageOut]:
-    await get_visible_lobby(db, lobby_id, viewer)
+    """Chat history — current members only (joined/paid, host included). Former (left/removed) members
+    and non-members of public lobbies get 403 NOT_MEMBER; strangers to a private lobby get 404."""
+    lobby = await get_visible_lobby(db, lobby_id, viewer)
+    if find_active_member(lobby, viewer.id) is None:
+        raise NotMember("Only players in this match can read its chat")
     stmt = select(LobbyMessage).where(LobbyMessage.lobby_id == lobby_id)
     if before is not None:
         stmt = stmt.where(LobbyMessage.created_at < before)
@@ -487,13 +534,16 @@ async def send_message(db: AsyncSession, lobby_id: uuid.UUID, user: User, body: 
     lobby = await get_lobby(db, lobby_id)
     if find_active_member(lobby, user.id) is None:
         raise NotMember()
+    # per user across all lobbies: short bursts are fine, floods aren't (429 RATE_LIMITED)
+    await enforce(f"chat:{user.id}", *CHAT_BURST, "You're sending messages too fast — slow down a little")
+    await enforce(f"chat-10m:{user.id}", *CHAT_SUSTAINED, "Too many messages — take a breather and try again soon")
     msg = LobbyMessage(
         id=uuid.uuid4(), lobby_id=lobby.id, user_id=user.id, kind="chat", body=body.strip()[:500], created_at=utcnow()
     )
     msg.user = user
     db.add(msg)
     out = _message_out(msg)
-    publish_on_commit(db, lobby_channel(lobby.id), "lobby.message", out)
+    publish_on_commit(db, chat_channel(lobby.id), "lobby.message", out)
     await db.commit()
     return out
 
@@ -672,13 +722,19 @@ def _restore_dropout(lobby: Lobby, member: LobbyMember) -> bool:
     return False
 
 
-async def join_lobby(db: AsyncSession, lobby_id: uuid.UUID, user: User) -> Lobby:
+async def join_lobby(
+    db: AsyncSession, lobby_id: uuid.UUID, user: User, *, code: str | None = None, invited: bool = False
+) -> Lobby:
+    """Reserve a seat. Private lobbies need an invite (see `_may_join_private`) unless `invited`
+    (trusted callers, e.g. the host-scoped demo fill) — without one they're reported as not found."""
     lobby = await get_lobby(db, lobby_id, for_update=True)
     now = utcnow()
-    ensure_open_for_seats(lobby, now)
     existing = find_member(lobby, user.id)
     if existing is not None and existing.status in ACTIVE:
         raise AlreadyMember()
+    if lobby.visibility != "public" and not invited and not await _may_join_private(db, lobby, user, code):
+        raise NotFound("Match not found")
+    ensure_open_for_seats(lobby, now)
     gate = eligibility(user, lobby)
     if not gate.can_join:
         raise NotEligible(details={"reasons": gate.reasons})
@@ -720,12 +776,17 @@ async def leave_lobby(
     was_paid = member.status == "paid"
     member.status = "left"
     member.left_at = now
+    unsubscribe_on_commit(db, user.id, chat_channel(lobby.id))
     member.reserved_until = None
     member.team = None
+    if lobby.status == "forming":
+        await ledger.release_coupons(db, lobby.id, member_ids=[member.id])
     await ledger.cancel_pending_payments(db, member_ids=[member.id], reason="member left")
 
     if lobby.status == "forming":
-        refund = member.paid_paise - member.compensated_paise
+        # coupon discounts were never paid by the member → not refundable
+        discount = (await ledger.paid_discounts(db, lobby.id, member_ids=[member.id])).get(member.id, 0)
+        refund = member.paid_paise - member.compensated_paise - discount
         if refund > 0:
             await wallet.credit(db, user.id, refund, "refund", f"Refund — you left {lobby.title}",
                                 ref_type="lobby", ref_id=lobby.id)
@@ -733,6 +794,9 @@ async def leave_lobby(
             await ledger.mark_lobby_payments_refunded(db, lobby.id, member_ids=[member.id])
             await post_system_message(db, lobby.id, f"{user.name} left — {rupees(refund)} refunded as credits")
         else:
+            if member.paid_paise > member.compensated_paise:  # fully coupon-paid seat: just give the use back
+                member.compensated_paise = member.paid_paise
+                await ledger.mark_lobby_payments_refunded(db, lobby.id, member_ids=[member.id])
             await post_system_message(db, lobby.id, f"{user.name} left the match")
     else:
         await post_system_message(db, lobby.id, f"{user.name} dropped out — a seat just opened")
@@ -759,6 +823,7 @@ async def remove_unpaid_member(db: AsyncSession, lobby_id: uuid.UUID, host: User
     if member.status == "paid":
         raise Conflict("Only unpaid players can be removed")
     await _release_seat(db, lobby, member, reason="removed by the host")
+    await get_redis().delete(_invite_key(lobby.id, target_user_id))  # rejoining needs the invite code again
     await db.commit()
     return await get_lobby(db, lobby.id, refresh=True)
 
@@ -766,6 +831,7 @@ async def remove_unpaid_member(db: AsyncSession, lobby_id: uuid.UUID, host: User
 async def _release_seat(db: AsyncSession, lobby: Lobby, member: LobbyMember, *, reason: str) -> None:
     """joined (unpaid) → removed. Caller holds the lobby lock and commits."""
     member.status = "removed"
+    unsubscribe_on_commit(db, member.user_id, chat_channel(lobby.id))
     member.left_at = utcnow()
     member.reserved_until = None
     member.team = None
@@ -869,7 +935,8 @@ def cover_amount(lobby: Lobby) -> int:
     return max(lobby.total_spots - paid_count(lobby), 0) * lobby.share_paise
 
 
-async def _host_reimbursed(db: AsyncSession, lobby: Lobby) -> int:
+async def host_reimbursed(db: AsyncSession, lobby: Lobby) -> int:
+    """Reimbursements the host already received for this lobby (full mode / cover remaining)."""
     await db.flush()
     total = await db.scalar(
         select(func.coalesce(func.sum(WalletTransaction.amount_paise), 0)).where(
@@ -882,28 +949,42 @@ async def _host_reimbursed(db: AsyncSession, lobby: Lobby) -> int:
     return int(total or 0)
 
 
-async def _route_seat_money(db: AsyncSession, lobby: Lobby, payer: LobbyMember, amount: int) -> None:
+async def _route_seat_money(
+    db: AsyncSession, lobby: Lobby, payer: LobbyMember, amount: int, *, net_paid: int | None = None
+) -> None:
     """Send a seat payment made in a *confirmed* lobby to whoever is owed it.
 
-    1. Dropout rule: the earliest uncompensated paid dropout is credited exactly what was paid
-       (capped at what they had paid).
-    2. Otherwise the host is reimbursed, up to what they fronted beyond their own seat
-       (full mode, or split after "cover remaining"). Any remainder is rounding surplus (venue).
+    1. Dropout rule: the earliest uncompensated paid dropout is credited what the newcomer actually
+       paid (`net_paid` — their coupon discount excluded), capped at what the dropout actually paid
+       (gross − their own coupon discounts − anything already returned). Coupon value is never
+       turned into credits. A dropout with nothing real to get back (fully coupon-paid seat) is
+       settled with no credit and the payment falls through to the next rule.
+    2. Otherwise the host is reimbursed (gross `amount` — the seat is credited in full, the discount's
+       funder absorbs it), up to what they fronted beyond their own seat (full mode, or split after
+       "cover remaining"). Any remainder is rounding / coupon surplus (venue / platform).
     """
+    net_paid = amount if net_paid is None else net_paid
     dropouts = sorted(
         (m for m in lobby.members
          if m.status == "left" and m.paid_paise > 0 and m.compensated_paise == 0 and m.id != payer.id),
         key=lambda m: m.left_at or m.joined_at,
     )
     payer_name = payer.user.name
-    if dropouts:
-        dropout = dropouts[0]
-        credit = min(amount, dropout.paid_paise)
-        dropout.compensated_paise = credit
+    for dropout in dropouts:
+        discount = (await ledger.paid_discounts(db, lobby.id, member_ids=[dropout.id])).get(dropout.id, 0)
+        held = dropout.paid_paise - dropout.compensated_paise - discount
+        if held <= 0:  # nothing real was paid for this seat → settle it, keep looking
+            dropout.compensated_paise = dropout.paid_paise
+            continue
+        credit = min(net_paid, held)
+        if credit <= 0:
+            return
+        dropout.compensated_paise += credit
         await wallet.credit(db, dropout.user_id, credit, "dropout_credit",
                             f"{payer_name} took your spot in {lobby.title}", ref_type="lobby", ref_id=lobby.id)
         await notify(db, dropout.user_id, "wallet_credit", f"{rupees(credit)} credited to your wallet",
-                     f"{payer_name} took your spot in {lobby.title} — you get back exactly what they paid.",
+                     f"{payer_name} took your spot in {lobby.title} — you get back what they paid "
+                     f"(up to what you paid).",
                      {**_lobby_data(lobby), "url": "/app/wallet"})
         return
 
@@ -911,7 +992,7 @@ async def _route_seat_money(db: AsyncSession, lobby: Lobby, payer: LobbyMember, 
     if host is None or host.id == payer.id:
         return
     fronted = host.paid_paise - host.compensated_paise - lobby.share_paise
-    outstanding = fronted - await _host_reimbursed(db, lobby)
+    outstanding = fronted - await host_reimbursed(db, lobby)
     credit = min(amount, outstanding)
     if credit > 0:
         await wallet.credit(db, lobby.host_id, credit, "reimbursement",
@@ -930,7 +1011,8 @@ async def apply_captured_payment(db: AsyncSession, lobby: Lobby, member: LobbyMe
     member.paid_at = now
     member.reserved_until = None
     if lobby.status == "confirmed" and member.role != "host":
-        await _route_seat_money(db, lobby, member, payment.amount_paise)
+        await _route_seat_money(db, lobby, member, payment.amount_paise,
+                                net_paid=payment.amount_paise - (payment.discount_paise or 0))
 
     amount = rupees(payment.amount_paise)
     line = {
@@ -1010,31 +1092,58 @@ async def _confirm(db: AsyncSession, lobby: Lobby) -> None:
 # ═══════════════════════════ lifecycle: expire / cancel / complete / transfer ═══════════════════════════
 
 
+async def _rain_bonus_recipients(db: AsyncSession, lobby: Lobby) -> list[uuid.UUID]:
+    """Who gets the rain bonus: distinct paid players other than the host, only when at least two
+    distinct players paid (a host can't farm bonuses from their own solo bookings), and at most
+    RAIN_BONUS_DAILY_CAP bonuses per player per IST day."""
+    paid = {m.user_id for m in active_members(lobby) if m.status == "paid"}
+    if len(paid) < 2:
+        return []
+    candidates = sorted(paid - {lobby.host_id})
+    if not candidates:
+        return []
+    day_start, _ = ist_day_bounds(ist_today())
+    await db.flush()
+    rows = await db.execute(
+        select(WalletTransaction.user_id, func.count())
+        .where(WalletTransaction.user_id.in_(candidates), WalletTransaction.kind == "bonus",
+               WalletTransaction.ref_type == "lobby", WalletTransaction.created_at >= day_start)
+        .group_by(WalletTransaction.user_id)
+    )
+    today = {uid: int(n) for uid, n in rows.all()}
+    return [uid for uid in candidates if today.get(uid, 0) < RAIN_BONUS_DAILY_CAP]
+
+
 async def _refund_everyone(
     db: AsyncSession, lobby: Lobby, *, kind: str, note: str, bonus_paise: int = 0
-) -> dict[uuid.UUID, int]:
+) -> tuple[dict[uuid.UUID, int], dict[uuid.UUID, int]]:
     """Return all money still held for this lobby to whoever paid it (as credits).
 
     Owed per member = paid − already compensated (− reimbursements already received, for the host).
-    Idempotent: `compensated_paise` is advanced by whatever is refunded. Returns refunds per user.
+    Idempotent: `compensated_paise` is advanced by whatever is refunded. Returns (refunds, bonuses)
+    per user; bonuses follow `_rain_bonus_recipients`.
     """
-    host_reimbursed = await _host_reimbursed(db, lobby)
+    reimbursed = await host_reimbursed(db, lobby)
+    discounts = await ledger.paid_discounts(db, lobby.id)  # coupon discounts: never paid → never refunded
+    await ledger.release_coupons(db, lobby.id)  # a cancellation before play restores coupon uses
     refunds: dict[uuid.UUID, int] = {}
     for m in lobby.members:
-        owed = m.paid_paise - m.compensated_paise - (host_reimbursed if m.user_id == lobby.host_id else 0)
+        owed = (m.paid_paise - m.compensated_paise - (reimbursed if m.user_id == lobby.host_id else 0)
+                - discounts.get(m.id, 0))
         if owed <= 0:
             continue
         await wallet.credit(db, m.user_id, owed, kind, note, ref_type="lobby", ref_id=lobby.id)
         m.compensated_paise += owed
         refunds[m.user_id] = owed
+    bonuses: dict[uuid.UUID, int] = {}
     if bonus_paise > 0:
-        for m in active_members(lobby):
-            if m.status == "paid":
-                await wallet.credit(db, m.user_id, bonus_paise, "bonus", f"Rain bonus — {lobby.title}",
-                                    ref_type="lobby", ref_id=lobby.id)
+        for user_id in await _rain_bonus_recipients(db, lobby):
+            await wallet.credit(db, user_id, bonus_paise, "bonus", f"Rain bonus — {lobby.title}",
+                                ref_type="lobby", ref_id=lobby.id)
+            bonuses[user_id] = bonus_paise
     await ledger.cancel_pending_payments(db, lobby_id=lobby.id, reason=f"match {lobby.status}")
     await ledger.mark_lobby_payments_refunded(db, lobby.id)
-    return refunds
+    return refunds, bonuses
 
 
 async def _release_lobby_slot(db: AsyncSession, lobby: Lobby) -> None:
@@ -1047,7 +1156,8 @@ async def expire_lobby(db: AsyncSession, lobby: Lobby) -> None:
     """forming → expired (deadline passed): release the slot, refund every payment. Caller commits."""
     lobby.status = "expired"
     lobby.booking.status = "expired"
-    refunds = await _refund_everyone(db, lobby, kind="refund", note=f"Refund — {lobby.title} didn't fill in time")
+    refunds, _ = await _refund_everyone(db, lobby, kind="refund",
+                                        note=f"Refund — {lobby.title} didn't fill in time")
     await _release_lobby_slot(db, lobby)
     for m in active_members(lobby):
         refunded = refunds.get(m.user_id, 0)
@@ -1065,8 +1175,8 @@ async def cancel_lobby(
     db: AsyncSession, lobby: Lobby, *, refund_kind: str = "refund", bonus_paise: int = 0, note: str = ""
 ) -> int:
     """Cancel a forming/confirmed match: every payer gets their money back as credits (+ optional
-    bonus per paid member), the slot is released. Returns total refunded (bonuses excluded).
-    Caller commits."""
+    rain bonus — see `_rain_bonus_recipients`), the slot is released. Returns total refunded (bonuses
+    excluded). Caller commits."""
     lobby = await get_lobby(db, lobby.id, for_update=True)
     if lobby.status not in OPEN_LOBBY_STATUSES:
         raise LobbyClosed()
@@ -1075,11 +1185,11 @@ async def cancel_lobby(
     lobby.booking.status = "cancelled"
     lobby.booking.cancelled_at = now
     reason = note or "The match was cancelled"
-    refunds = await _refund_everyone(db, lobby, kind=refund_kind, note=f"Refund — {lobby.title} cancelled",
-                                     bonus_paise=bonus_paise)
+    refunds, bonuses = await _refund_everyone(db, lobby, kind=refund_kind,
+                                              note=f"Refund — {lobby.title} cancelled", bonus_paise=bonus_paise)
     await _release_lobby_slot(db, lobby)
     for m in active_members(lobby):
-        refunded = refunds.get(m.user_id, 0) + (bonus_paise if m.status == "paid" else 0)
+        refunded = refunds.get(m.user_id, 0) + bonuses.get(m.user_id, 0)
         body = f"{reason}. {rupees(refunded)} is back in your Pytch Credits." if refunded else f"{reason}."
         await notify(db, m.user_id, "lobby_cancelled", f"{lobby.title} cancelled", body, _lobby_data(lobby))
     await post_system_message(db, lobby.id, f"❌ {reason}. Payments were refunded as credits.")
@@ -1116,7 +1226,9 @@ async def transfer_to_slot(db: AsyncSession, lobby: Lobby, new_slot: Slot) -> Sl
     old_booking = lobby.booking
     old_slot = await slots_service.lock_slot_wait(db, lobby.slot_id)
     new_pitch = new_slot.pitch
-    recorded = lobby.recorded and new_pitch.has_camera
+    if lobby.recorded and not new_pitch.has_camera:  # the recording (and its fee) must never silently vanish
+        raise Conflict("This match is being recorded — pick a pitch with a camera")
+    recorded = lobby.recorded
 
     new_booking = Booking(
         id=uuid.uuid4(),

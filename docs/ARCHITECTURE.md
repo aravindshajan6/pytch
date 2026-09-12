@@ -80,7 +80,8 @@ Seats counted = members with status in (`joined`,`paid`). `filled_spots` counts 
 
 **Dropout rule:** paid member leaves a *confirmed* lobby → status `left`, seat reopens, `emit member.dropped`.
 If kickoff is within `SOS_WINDOW_HOURS` (6 h) the bench module auto-creates an SOS. When a sub later pays for that seat,
-the earliest uncompensated dropout gets credited exactly what the sub paid (`kind=dropout_credit`); `compensated_paise` records it.
+the earliest uncompensated dropout gets credited what the sub really paid — **net of coupons on both sides**, capped at what the
+dropout really paid (a seat paid entirely by coupon earns nothing) (`kind=dropout_credit`); `compensated_paise` records it.
 In *forming* lobbies a leaving paid member is simply refunded to credits.
 
 **Payment capture (single code path):** `payments.service.capture(db, payment, provider_payment_id)` — used by mock completion, Razorpay verify and Razorpay webhook. Idempotent. If the lobby can no longer accept it (expired/cancelled/seat removed) the captured amount is refunded to credits and payment marked `refunded`.
@@ -148,8 +149,8 @@ async def pinned_clips_for_user(db, user_id, viewer_id) -> list[ClipOut]       #
 ## Domain events (`app.core.events`)
 | Event | Emitted by | Handled by |
 |---|---|---|
-| `lobby.confirmed(lobby_id)` | lobbies | gamification (host XP) |
-| `match.completed(lobby_id)` | lobbies (worker / dev) | ratings (rating requests), highlights (schedule recording), gamification (XP, stats, streaks, badges) |
+| `lobby.confirmed(lobby_id)` | lobbies | — (no rewards: a confirm → cancel loop must earn nothing) |
+| `match.completed(lobby_id)` | lobbies (worker / dev) | ratings (rating requests), highlights (schedule recording), gamification (player + **host** XP, stats, streaks, badges incl. Rain Dancer for matches moved indoors) |
 | `member.dropped(lobby_id, user_id, member_id, hours_to_kickoff, was_paid)` | lobbies | bench (auto-SOS within 6 h), gamification/stats (dropouts++) |
 | `sub.paid(lobby_id, user_id, member_id, sos_id)` | lobbies (on capture of a sub seat) | bench (fill counter, close SOS, notify host), gamification (Hero Sub) |
 | `lobby.cancelled / lobby.expired(lobby_id)` | lobbies | bench (cancel open SOS), weather (close alerts) |

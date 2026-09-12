@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { ArrowDownLeft, ArrowUpRight, Gift, HandCoins, LifeBuoy, ShoppingBag, Sparkles, Umbrella, Undo2, Zap, type LucideIcon } from 'lucide-react'
+import { ArrowDownLeft, ArrowUpRight, Gift, HandCoins, LifeBuoy, Scale, ShoppingBag, Sparkles, Umbrella, Undo2, Zap, type LucideIcon } from 'lucide-react'
 import { motion, useMotionTemplate, useMotionValue, useReducedMotion, useSpring, useTransform } from 'motion/react'
 import { useEffect, useMemo } from 'react'
 import { LogoMark } from '@/components/layout/Logo'
@@ -22,6 +22,7 @@ const KIND: Record<WalletTxnKind, { icon: LucideIcon; color: string; label: stri
   dropout_credit: { icon: LifeBuoy, color: 'var(--color-flare)', label: 'Dropout credit' },
   spend: { icon: ShoppingBag, color: 'var(--color-muted)', label: 'Spent on a booking' },
   bonus: { icon: Gift, color: 'var(--color-grape-soft)', label: 'Bonus' },
+  adjustment: { icon: Scale, color: 'var(--color-electric)', label: 'Pytch adjustment' },
 }
 
 const HOW = [
@@ -46,15 +47,15 @@ export default function WalletPage() {
   }, [wallet.data, user, patchUser])
 
   const txns = useMemo(() => wallet.data?.transactions ?? [], [wallet.data])
+  // Lifetime totals come from the server (they leave out credits a checkout held and handed back).
+  // Fallback for an older API: the visible transactions only, with hold/return pairs netted out.
   const stats = useMemo(() => {
-    let inP = 0
-    let outP = 0
-    for (const t of txns) {
-      if (t.amount_paise >= 0) inP += t.amount_paise
-      else outP -= t.amount_paise
-    }
-    return { inP, outP }
-  }, [txns])
+    const w = wallet.data
+    if (w && w.total_credited_paise != null && w.total_spent_paise != null)
+      return { inP: w.total_credited_paise, outP: w.total_spent_paise, lifetime: true }
+    const { inP, outP } = totalsWithoutHolds(txns)
+    return { inP, outP, lifetime: false }
+  }, [wallet.data, txns])
   const groups = useMemo(() => groupByDay(txns), [txns])
 
   return (
@@ -69,8 +70,22 @@ export default function WalletPage() {
         )}
 
         <div className="grid grid-cols-2 gap-3 self-start">
-          <StatTile icon={ArrowDownLeft} color="var(--color-mint)" label="Credited" value={stats.inP} loading={wallet.isPending} />
-          <StatTile icon={ArrowUpRight} color="var(--color-muted)" label="Spent" value={stats.outP} loading={wallet.isPending} />
+          <StatTile
+            icon={ArrowDownLeft}
+            color="var(--color-mint)"
+            label="Credited"
+            hint={stats.lifetime ? 'All time' : txns.length ? `Last ${txns.length} transactions` : undefined}
+            value={stats.inP}
+            loading={wallet.isPending}
+          />
+          <StatTile
+            icon={ArrowUpRight}
+            color="var(--color-muted)"
+            label="Spent"
+            hint={stats.lifetime ? 'All time' : txns.length ? `Last ${txns.length} transactions` : undefined}
+            value={stats.outP}
+            loading={wallet.isPending}
+          />
           <div className={cn('col-span-2 rounded-3xl bg-white/4 p-5 ring-1 ring-white/8', LIGHT_SURFACE)}>
             <div className="flex items-center gap-2 text-sm font-semibold">
               <Sparkles className="h-4 w-4 text-volt" /> How credits work
@@ -157,7 +172,6 @@ function BalanceCard({ balance, name, history }: { balance: number; name: string
   const gx = useTransform(px, [0, 1], [10, 90])
   const gy = useTransform(py, [0, 1], [0, 100])
   const glare = useMotionTemplate`radial-gradient(circle at ${gx}% ${gy}%, color-mix(in srgb, var(--color-white) 16%, transparent), transparent 45%)`
-  const games = Math.floor(balance / 15000)
 
   return (
     <div style={{ perspective: 1200 }}>
@@ -209,13 +223,7 @@ function BalanceCard({ balance, name, history }: { balance: number; name: string
               <AnimatedNumber value={balance} format={(n) => inr(n)} duration={1.4} />
             </div>
             <div className="mt-2 text-sm text-fg/70">
-              {games > 0 ? (
-                <>
-                  ≈ <span className="font-semibold text-volt">{games}</span> game{games === 1 ? '' : 's'} at ₹150 a share
-                </>
-              ) : (
-                'Auto-applied to your next booking'
-              )}
+              {balance > 0 ? 'Applied automatically at your next checkout' : 'Refunds and rain-checks land here instantly'}
             </div>
           </div>
           <div className="mt-5 flex items-end justify-between gap-4">
@@ -261,7 +269,21 @@ function Sparkline({ history }: { history: WalletTxn[] }) {
   )
 }
 
-function StatTile({ icon: Icon, color, label, value, loading }: { icon: LucideIcon; color: string; label: string; value: number; loading: boolean }) {
+function StatTile({
+  icon: Icon,
+  color,
+  label,
+  hint,
+  value,
+  loading,
+}: {
+  icon: LucideIcon
+  color: string
+  label: string
+  hint?: string
+  value: number
+  loading: boolean
+}) {
   return (
     <div className={cn('rounded-3xl bg-white/4 p-5 ring-1 ring-white/8', LIGHT_SURFACE)}>
       <div className="flex items-center gap-2 text-xs font-semibold tracking-wider text-muted uppercase">
@@ -271,6 +293,7 @@ function StatTile({ icon: Icon, color, label, value, loading }: { icon: LucideIc
         {label}
       </div>
       <div className="mt-3 font-display text-2xl">{loading ? <Skeleton className="h-7 w-24 rounded-lg" /> : <AnimatedNumber value={value} format={(n) => inr(n)} />}</div>
+      {hint && !loading && <div className="mt-0.5 text-[11px] text-subtle">{hint}</div>}
     </div>
   )
 }
@@ -300,6 +323,29 @@ function TxnRow({ t, index }: { t: WalletTxn; index: number }) {
       </div>
     </motion.li>
   )
+}
+
+/**
+ * Credited / spent over `txns`, ignoring credits a checkout debited and then returned (a `payment`
+ * debit matched by a credit on the same payment) — that money never left the wallet.
+ */
+function totalsWithoutHolds(txns: WalletTxn[]) {
+  const returned = new Map<string, number>()
+  for (const t of txns) if (t.ref_type === 'payment' && t.ref_id && t.amount_paise > 0) returned.set(t.ref_id, (returned.get(t.ref_id) ?? 0) + t.amount_paise)
+  const spentOnRef = new Map<string, number>()
+  for (const t of txns) if (t.ref_type === 'payment' && t.ref_id && t.amount_paise < 0) spentOnRef.set(t.ref_id, (spentOnRef.get(t.ref_id) ?? 0) - t.amount_paise)
+  let inP = 0
+  let outP = 0
+  for (const t of txns) {
+    if (t.amount_paise >= 0) inP += t.amount_paise
+    else outP -= t.amount_paise
+  }
+  for (const [ref, back] of returned) {
+    const matched = Math.min(back, spentOnRef.get(ref) ?? 0)
+    inP -= matched
+    outP -= matched
+  }
+  return { inP, outP }
 }
 
 function groupByDay(items: WalletTxn[]) {

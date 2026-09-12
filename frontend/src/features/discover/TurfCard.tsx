@@ -1,11 +1,11 @@
-import { Home, Star, Sun, Video } from 'lucide-react'
+import { Home, Sparkles, Star, Sun, Video } from 'lucide-react'
 import { motion } from 'motion/react'
 import { Link } from 'react-router'
 import { Chip } from '@/components/ui/Chip'
 import { TurfArt } from '@/components/ui/TurfArt'
 import { cn } from '@/lib/cn'
 import { formatINR, formatKm } from '@/lib/format'
-import { SPORTS } from '@/lib/sports'
+import { sportInfo } from '@/lib/sports'
 import type { TurfSummary } from '@/types/api'
 
 export function TurfCard({
@@ -50,6 +50,10 @@ export function TurfCard({
                   </span>
                   {forming} game{forming === 1 ? '' : 's'} forming
                 </span>
+              ) : turf.is_featured ? (
+                <span className="inline-flex h-6 items-center gap-1 rounded-full bg-ink-900/70 px-2.5 text-[11px] font-semibold backdrop-blur">
+                  <Sparkles className="h-3 w-3 text-sun" /> Featured
+                </span>
               ) : (
                 <span />
               )}
@@ -65,10 +69,10 @@ export function TurfCard({
               {turf.sports.map((s) => (
                 <span
                   key={s}
-                  title={SPORTS[s].label}
+                  title={sportInfo(s).label}
                   className="flex h-7 w-7 items-center justify-center rounded-full bg-ink-900/70 text-sm backdrop-blur transition-transform duration-300 group-hover:-translate-y-0.5"
                 >
-                  {SPORTS[s].emoji}
+                  {sportInfo(s).emoji}
                 </span>
               ))}
             </div>

@@ -41,6 +41,7 @@ export type WalletTxnKind =
   | 'dropout_credit'
   | 'spend'
   | 'bonus'
+  | 'adjustment' // admin credit/debit
 
 export type SOSStatus = 'open' | 'filled' | 'expired' | 'cancelled'
 export type RecordingStatus = 'scheduled' | 'processing' | 'ready' | 'failed'
@@ -105,6 +106,13 @@ export type ErrorCode =
   | 'LIMIT_REACHED'
   | 'CONFLICT'
   | 'DEMO_DISABLED'
+  | 'ACCOUNT_SUSPENDED'
+  | 'COUPON_INVALID'
+  | 'COUPON_EXHAUSTED'
+  | 'BOOKINGS_PAUSED'
+  | 'SIGNUPS_PAUSED'
+  | 'PROVIDER_NOT_APPROVED'
+  | 'PROVIDER_REQUIRED'
   | 'INTERNAL_ERROR'
 
 // ───────────────────────────── Meta ─────────────────────────────
@@ -133,6 +141,8 @@ export interface AppMeta {
   seat_reservation_minutes: number // 10 (joined-but-unpaid)
   sub_discount_pct: number // 20
   sos_window_hours: number // 6
+  cancel_cutoff_hours?: number // 6 — confirmed matches can't be cancelled closer to kick-off
+  dropout_penalty_hours?: number // 24 — leaving a confirmed match closer than this counts as a dropout
   bench_default_radius_km: number // 5
   rain_transfer_cover_paise: number // 20000
   rain_bonus_paise: number // 2500
@@ -143,6 +153,8 @@ export interface AppMeta {
   areas: AreaMeta[]
   rating_tags: string[]
   city_center: { lat: number; lng: number }
+  maintenance_banner: string | null // admin kill-switch banner; null = hidden
+  bookings_enabled: boolean // false = new bookings paused (POST /bookings → 503 BOOKINGS_PAUSED)
 }
 
 // ───────────────────────────── Auth & Users ─────────────────────────────
@@ -271,6 +283,7 @@ export interface TurfSummary {
   rating_count: number
   distance_km: number | null
   open_lobbies_count: number
+  is_featured?: boolean // "Featured on Discover" (admin) — ranked first by default
 }
 
 export interface Pitch {
@@ -460,6 +473,7 @@ export interface QuickMatchResponse {
 
 export interface PayRequest {
   use_credits: boolean
+  coupon_code?: string | null
 }
 
 export interface RazorpayCheckoutOptions {
@@ -480,7 +494,9 @@ export interface PaymentIntent {
   purpose: PaymentPurpose
   amount_paise: number // gross amount
   credits_applied_paise: number
-  payable_paise: number // amount - credits
+  discount_paise: number // coupon discount (0 when none)
+  coupon_code: string | null
+  payable_paise: number // amount - discount - credits
   lobby_id: UUID | null
   razorpay: RazorpayCheckoutOptions | null
 }
@@ -496,6 +512,15 @@ export interface Payment {
   status: PaymentStatus
   created_at: ISODateTime
   paid_at: ISODateTime | null
+}
+
+/** POST /coupons/validate {code, lobby_id} */
+export interface CouponValidation {
+  valid: boolean
+  code: string
+  discount_paise: number
+  final_paise: number // share − discount (before credits)
+  message: string
 }
 
 export interface MockCompleteRequest {
@@ -522,7 +547,10 @@ export interface WalletTxn {
 /** GET /wallet */
 export interface Wallet {
   balance_paise: number
-  transactions: WalletTxn[]
+  /** lifetime totals, excluding credits a checkout held and then returned (never-completed payments) */
+  total_credited_paise: number
+  total_spent_paise: number
+  transactions: WalletTxn[] // last 50
 }
 
 // ───────────────────────────── Ratings ─────────────────────────────
@@ -602,8 +630,13 @@ export interface BenchUpdate {
 
 /** GET /bench/nearby */
 export interface BenchNearby {
+  /**
+   * Privacy-bucketed: exact for 0–3, then the bucket floor — 4 = 4–9, 10 = 10–19, 20 = 20–49, 50 = 50+.
+   * Render via `benchCountLabel` ("4+", "10+"…), never as an exact number.
+   */
   count: number
-  blips: { lat: number; lng: number }[] // fuzzed ±300m, max 30
+  /** approximate positions: snapped into ~1 km grid cells (not real locations), max 30 */
+  blips: { lat: number; lng: number }[]
 }
 
 export interface SOSRequest {

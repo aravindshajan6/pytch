@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { animate, svg } from 'animejs'
 import { ArrowLeft, ArrowRight, CloudRain, Droplets, Home, MapPin, ShieldCheck, Umbrella, Wallet } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
@@ -10,13 +11,16 @@ import { Chip } from '@/components/ui/Chip'
 import { Countdown } from '@/components/ui/Countdown'
 import { ProgressRing } from '@/components/ui/ProgressRing'
 import { Sheet } from '@/components/ui/Sheet'
-import { EmptyState, ErrorState, Skeleton } from '@/components/ui/States'
+import { EmptyState, ErrorState, ResourceErrorState, Skeleton } from '@/components/ui/States'
 import { TurfArt } from '@/components/ui/TurfArt'
+import { useLobby } from '@/features/lobby/api'
 import { useMeta } from '@/hooks/useMeta'
 import { errorMessage, isApiError } from '@/lib/api/client'
+import { qk } from '@/lib/api/queryKeys'
 import { celebrate } from '@/lib/celebrate'
 import { cn } from '@/lib/cn'
 import { formatINR, formatKm, formatTime, formatWhen } from '@/lib/format'
+import { useChannel } from '@/lib/realtime'
 import type { TransferAlternative, WeatherAlert } from '@/types/api'
 import { useAlternatives, useDismissAlert, useRainCheck, useTransfer, useWeatherAlert } from './api'
 import { RainCanvas } from './components/RainCanvas'
@@ -41,17 +45,35 @@ export default function WeatherAlertPage() {
       </div>
     )
   if (q.isError || !q.data)
-    return isApiError(q.error, 'NOT_FOUND') ? (
-      <EmptyState icon="🌤️" title="Alert not found" description="It may have cleared up already." action={<LinkButton to="/app">Back home</LinkButton>} />
-    ) : (
-      <ErrorState error={q.error} onRetry={() => q.refetch()} />
+    return (
+      <ResourceErrorState
+        error={q.error}
+        onRetry={() => q.refetch()}
+        notFound={{ icon: '🌤️', title: 'Alert not found', description: 'It may have cleared up already.' }}
+        forbidden={{
+          icon: '🔒',
+          title: "You're not in this match",
+          description: 'Weather alerts are only visible to the players in the game — it may have moved to another pitch since.',
+        }}
+        action={<LinkButton to="/app/matches">My matches</LinkButton>}
+      />
     )
   return <AlertView alert={q.data} />
 }
 
 function AlertView({ alert }: { alert: WeatherAlert }) {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const [outcome, setOutcome] = useState<Outcome | null>(null)
+
+  // The host's decision (move / rain-check / play on) lands as `lobby.updated` on the match channel —
+  // refresh the alert so members watching this page see the outcome without a reload.
+  useChannel(`lobby:${alert.lobby_id}`, (m) => {
+    if (m.event !== 'lobby.updated') return
+    qc.invalidateQueries({ queryKey: qk.weatherAlert(alert.id) })
+    qc.invalidateQueries({ queryKey: qk.weatherAlerts })
+    qc.invalidateQueries({ queryKey: qk.lobby(alert.lobby_id) })
+  })
   const status = outcome?.kind ?? alert.status
   const open = status === 'open'
   const sunny = status === 'transferred'
@@ -286,6 +308,8 @@ function StormHero({
 function HostOptions({ alert, onResolved }: { alert: WeatherAlert; onResolved: (o: Outcome) => void }) {
   const meta = useMeta()
   const alts = useAlternatives(alert)
+  // recorded matches can only move to pitches with a camera (the recording is paid for)
+  const recorded = !!useLobby(alert.lobby_id).data?.recorded
   const transfer = useTransfer(alert)
   const rainCheck = useRainCheck(alert)
   const dismiss = useDismissAlert(alert)
@@ -340,7 +364,8 @@ function HostOptions({ alert, onResolved }: { alert: WeatherAlert; onResolved: (
             <div className="text-xs font-semibold tracking-[0.2em] text-volt uppercase">Recommended</div>
             <h2 className="mt-1 text-xl font-semibold">Move indoors</h2>
             <p className="mt-1 text-sm text-muted">
-              Indoor pitches within 10 km at the same time. Pytch covers up to {formatINR(cover)} of any price difference.
+              Indoor pitches within 10 km at the same time{recorded ? ', with a camera so your recording still happens' : ''}. Pytch covers up to{' '}
+              {formatINR(cover)} of any price difference — and everyone earns the Rain Dancer badge once the rescued game is played.
             </p>
           </div>
           <Chip tone="volt" size="md">
@@ -359,8 +384,12 @@ function HostOptions({ alert, onResolved }: { alert: WeatherAlert; onResolved: (
         ) : !alts.data?.length ? (
           <EmptyState
             icon="🏟️"
-            title="No indoor slots free nearby"
-            description="Nothing within 10 km at this kick-off. Rain-check below and everyone gets their money back."
+            title={recorded ? 'No indoor pitch with a camera is free' : 'No indoor slots free nearby'}
+            description={
+              recorded
+                ? 'This match is being recorded, so it can only move to a camera pitch — none is free within 10 km at this kick-off. Rain-check below and everyone gets their money back.'
+                : 'Nothing within 10 km at this kick-off. Rain-check below and everyone gets their money back.'
+            }
           />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -390,7 +419,7 @@ function HostOptions({ alert, onResolved }: { alert: WeatherAlert; onResolved: (
             <Umbrella className="h-5 w-5" />
           </div>
           <h3 className="mt-4 text-lg font-semibold">We'll play in the rain</h3>
-          <p className="mt-1 flex-1 text-sm text-muted">Keep the booking as it is. Rain Dancer badge energy.</p>
+          <p className="mt-1 flex-1 text-sm text-muted">Keep the booking as it is. Bring a towel — and a spare pair of socks.</p>
           <Button variant="ghost" className="mt-5 self-start" onClick={() => setConfirm('dismiss')}>
             Keep the game on
           </Button>

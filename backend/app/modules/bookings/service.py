@@ -3,13 +3,14 @@
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.codes import booking_code, short_code
 from app.core.config import settings
 from app.core.constants import SPORTS
 from app.core.errors import AppError, NotFound
+from app.core.ratelimit import enforce
 from app.core.timeutils import utcnow
 from app.modules.bookings.models import Booking
 from app.modules.bookings.schemas import BookingOut, CreateBookingRequest
@@ -17,15 +18,45 @@ from app.modules.lobbies import service as lobbies
 from app.modules.lobbies.detail_schemas import CreateBookingResponse, LobbyDetail
 from app.modules.lobbies.errors import LobbyClosed, NotHost, TooLate
 from app.modules.lobbies.models import Lobby, LobbyMember
+from app.modules.platform import service as platform
 from app.modules.slots import service as slots
 from app.modules.slots.models import Slot
+from app.modules.turfs.availability import pitch_bookable
 from app.modules.users.models import User
 
 _SPORT_LABEL = {s["key"]: s["label"] for s in SPORTS}
+MAX_FORMING = {"split": 2, "full": 1}  # concurrent unpaid (forming) lobbies a host may hold, by mode
+BOOKING_RATE = (10, 600)  # bookings per user per 10 min
 
 
 class InvalidBooking(AppError):
     code, status_code, message = "VALIDATION_ERROR", 422, "Invalid booking request"
+
+
+class BookingsPaused(AppError):
+    code, status_code, message = "BOOKINGS_PAUSED", 503, "New bookings are paused right now — please try again soon"
+
+
+class HoldLimitReached(AppError):
+    code, status_code, message = "LIMIT_REACHED", 409, "You have too many unpaid bookings open"
+
+
+async def _check_open_holds(db: AsyncSession, user: User, mode: str) -> None:
+    """Each forming lobby holds a slot until it's paid or expires; a player may only hold a few at once
+    (MAX_FORMING[mode]) so nobody can block a venue's calendar without paying. Takes a per-host
+    transaction-level advisory lock first so parallel requests can't both pass the count."""
+    await db.execute(select(func.pg_advisory_xact_lock(func.hashtext(f"booking-host:{user.id}"))))
+    open_now = int(await db.scalar(
+        select(func.count()).select_from(Lobby).where(
+            Lobby.host_id == user.id, Lobby.status == "forming", Lobby.mode == mode)
+    ) or 0)
+    cap = MAX_FORMING[mode]
+    if open_now >= cap:
+        kind = "split" if mode == "split" else "full-payment"
+        raise HoldLimitReached(
+            f"You already have {open_now} unpaid {kind} booking{'s' if open_now != 1 else ''} open — pay for or "
+            f"cancel {'one' if open_now == 1 else 'them'} before booking another slot",
+            details={"mode": mode, "open": open_now, "limit": cap})
 
 
 def _default_title(slot: Slot) -> str:
@@ -33,9 +64,9 @@ def _default_title(slot: Slot) -> str:
     return f"{pitch.format} {_SPORT_LABEL.get(pitch.sport, pitch.sport.title())} · {pitch.turf.name}"[:80]
 
 
-def _validate(slot: Slot, req: CreateBookingRequest) -> None:
+async def _validate(db: AsyncSession, slot: Slot, req: CreateBookingRequest) -> None:
     pitch = slot.pitch
-    if not pitch.is_active:
+    if not await pitch_bookable(db, pitch):  # inactive venue, suspended partner or disabled sport
         raise slots.SlotUnavailable()
     max_spots = pitch.capacity + 4
     if not 2 <= req.total_spots <= max_spots:
@@ -51,21 +82,29 @@ async def create_booking(db: AsyncSession, user: User, req: CreateBookingRequest
 
     Split: slot held `split_window_minutes` for everyone to pay their share.
     Full : slot held `full_hold_minutes` for the host to pay the total.
+    Kill switch: runtime setting `bookings_enabled=false` → 503 BOOKINGS_PAUSED.
+    Abuse limits: ≤ MAX_FORMING open unpaid lobbies per host and mode → 409 LIMIT_REACHED;
+    BOOKING_RATE per user → 429 RATE_LIMITED.
     """
+    if not await platform.get_setting("bookings_enabled", db):
+        raise BookingsPaused()
+    await enforce(f"booking-create:{user.id}", *BOOKING_RATE, "Too many bookings in a short time — try again soon")
+    await _check_open_holds(db, user, req.mode)
     slot = await slots.lock_slot(db, req.slot_id)
     if slot.status != "available":
         raise slots.SlotUnavailable()
     now = utcnow()
     if slot.start_at <= now:
         raise slots.SlotUnavailable("This slot has already started")
-    _validate(slot, req)
+    await _validate(db, slot, req)
     pitch = slot.pitch
 
     pitch_fee = slot.price_paise
     recording_fee = pitch.camera_price_paise if req.recorded else 0
     total = pitch_fee + recording_fee
     share = lobbies.share_for(total, req.total_spots)
-    window = settings.split_window_minutes if req.mode == "split" else settings.full_hold_minutes
+    window = (await platform.get_setting("split_window_minutes", db) if req.mode == "split"
+              else settings.full_hold_minutes)
     deadline = min(now + timedelta(minutes=window), slot.start_at)
 
     booking = Booking(
@@ -132,7 +171,8 @@ async def create_booking(db: AsyncSession, user: User, req: CreateBookingRequest
     await lobbies.post_system_message(
         db, lobby.id,
         f"🏟️ {user.name} booked {lobbies.kickoff_label(slot.start_at)} — "
-        + ("everyone pays their share within 30 min." if req.mode == "split" else "host is paying the full amount."),
+        + (f"everyone pays their share within {window} min." if req.mode == "split"
+           else "host is paying the full amount."),
     )
     await db.commit()
 

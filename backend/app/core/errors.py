@@ -9,10 +9,10 @@ from typing import Any
 
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import ORJSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.logging import logger
+from app.core.responses import ORJSONResponse
 
 
 class AppError(Exception):

@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal, engine
 from app.core.logging import configure_logging, logger
 from app.core.redis import close_redis, get_redis
+from app.core.timeutils import utcnow
 from app.modules import register_event_handlers
 
 
@@ -35,6 +36,10 @@ JOBS: list[JobSpec] = [
     JobSpec("app.modules.bench.jobs:expire_bench_and_sos", 30),
     JobSpec("app.modules.highlights.jobs:process_recordings", 20),
     JobSpec("app.modules.weather.jobs:scan_upcoming", 900),
+    JobSpec("app.modules.channels.jobs:import_ical_feeds", 60),
+    JobSpec("app.modules.channels.jobs:deliver_webhooks", 10),
+    JobSpec("app.modules.settlements.jobs:auto_generate_drafts", 3600),
+    JobSpec("app.modules.users.jobs:lift_lapsed_suspensions", 60),
 ]
 
 
@@ -55,6 +60,8 @@ async def _run_job(spec: JobSpec, fn: Callable[..., Awaitable[int | None]]) -> N
     try:
         async with SessionLocal() as db:
             processed = await fn(db)
+        # last-run marker per job → admin System health
+        await get_redis().set(f"pytch:job-last:{spec.target}", utcnow().isoformat(), ex=7 * 86400)
         if processed:
             logger.info("job %s processed=%s in %.0fms", spec.target, processed,
                         (time.perf_counter() - started) * 1000)
@@ -74,6 +81,16 @@ async def _loop(spec: JobSpec, stop: asyncio.Event) -> None:
             pass
 
 
+async def _heartbeat(stop: asyncio.Event) -> None:
+    """Liveness marker read by GET /admin/system/health."""
+    while not stop.is_set():
+        await get_redis().set("pytch:worker:heartbeat", utcnow().isoformat(), ex=120)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=30)
+        except TimeoutError:
+            pass
+
+
 async def main() -> None:
     configure_logging()
     register_event_handlers()
@@ -82,7 +99,7 @@ async def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
     logger.info("%s worker up — %d jobs", settings.app_name, len(JOBS))
-    await asyncio.gather(*(_loop(spec, stop) for spec in JOBS))
+    await asyncio.gather(_heartbeat(stop), *(_loop(spec, stop) for spec in JOBS))
     await close_redis()
     await engine.dispose()
 

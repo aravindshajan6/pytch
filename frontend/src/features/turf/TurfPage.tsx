@@ -6,17 +6,18 @@ import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button, LinkButton } from '@/components/ui/Button'
 import { Chip } from '@/components/ui/Chip'
-import { EmptyState, ErrorState, Skeleton } from '@/components/ui/States'
+import { EmptyState, ResourceErrorState, Skeleton } from '@/components/ui/States'
 import { TurfArt } from '@/components/ui/TurfArt'
-import { isApiError } from '@/lib/api/client'
+import { useMeta } from '@/hooks/useMeta'
 import { qk } from '@/lib/api/queryKeys'
 import { cn } from '@/lib/cn'
 import { formatDay, formatHour, formatINR, formatKm, istDate } from '@/lib/format'
 import { useChannel } from '@/lib/realtime'
-import { SPORTS } from '@/lib/sports'
+import { sportInfo } from '@/lib/sports'
 import type { Pitch, Slot, TurfDetail } from '@/types/api'
 import { useSlots, useTurf } from './api'
 import { BookingSheet } from './components/BookingSheet'
+import { BookingsPaused } from './components/BookingsPaused'
 import { DateStrip } from './components/DateStrip'
 import { PitchSelector } from './components/PitchSelector'
 import { SlotGrid, SlotGridSkeleton } from './components/SlotGrid'
@@ -27,16 +28,14 @@ export default function TurfPage() {
 
   if (turfQ.isLoading) return <TurfSkeleton />
   if (turfQ.isError) {
-    if (isApiError(turfQ.error, 'NOT_FOUND'))
-      return (
-        <EmptyState
-          icon="🏟️"
-          title="Turf not found"
-          description="It may have moved or closed. Find another pitch nearby."
-          action={<LinkButton to="/app/discover">Discover turfs</LinkButton>}
-        />
-      )
-    return <ErrorState error={turfQ.error} onRetry={() => turfQ.refetch()} />
+    return (
+      <ResourceErrorState
+        error={turfQ.error}
+        onRetry={() => turfQ.refetch()}
+        notFound={{ icon: '🏟️', title: 'Turf not found', description: 'It may have moved or closed. Find another pitch nearby.' }}
+        action={<LinkButton to="/app/discover">Discover turfs</LinkButton>}
+      />
+    )
   }
   if (!turfQ.data) return null
   return <TurfView turf={turfQ.data} />
@@ -55,6 +54,7 @@ function TurfView({ turf }: { turf: TurfDetail }) {
     return d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : istDate(0)
   })
   const slotsQ = useSlots(pitch?.id, date)
+  const bookingsPaused = useMeta().data?.bookings_enabled === false
   const [booking, setBooking] = useState<Slot | null>(null)
   const [flashes, setFlashes] = useState<Record<string, number>>({})
 
@@ -125,6 +125,7 @@ function TurfView({ turf }: { turf: TurfDetail }) {
               </span>
             </div>
             <Legend />
+            {bookingsPaused && <BookingsPaused className="mb-4" />}
 
             {risky.length > 0 && pitch && !pitch.is_indoor && (
               <motion.div
@@ -153,7 +154,12 @@ function TurfView({ turf }: { turf: TurfDetail }) {
             {slotsQ.isLoading ? (
               <SlotGridSkeleton />
             ) : slotsQ.isError ? (
-              <ErrorState error={slotsQ.error} onRetry={() => slotsQ.refetch()} />
+              <ResourceErrorState
+                error={slotsQ.error}
+                onRetry={() => slotsQ.refetch()}
+                notFound={{ icon: '🚧', title: 'This pitch isn’t taking bookings', description: 'It may be closed for now. Try another pitch or turf.' }}
+                action={<LinkButton to="/app/discover" variant="secondary">Discover turfs</LinkButton>}
+              />
             ) : upcoming.length === 0 ? (
               <EmptyState
                 icon="🌙"
@@ -261,7 +267,7 @@ function Hero({ turf, onBack, onShare }: { turf: TurfDetail; onBack: () => void;
           <div className="mb-3 flex flex-wrap gap-1.5">
             {turf.sports.map((s) => (
               <span key={s} className="inline-flex h-6 items-center gap-1 rounded-full bg-ink-900/60 px-2.5 text-[11px] font-semibold backdrop-blur">
-                {SPORTS[s].emoji} {SPORTS[s].label}
+                {sportInfo(s).emoji} {sportInfo(s).label}
               </span>
             ))}
             {turf.open_lobbies_count > 0 && (

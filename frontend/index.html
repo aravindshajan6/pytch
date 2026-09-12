@@ -6,19 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#05080a" />
     <meta name="description" content="PYTCH — book turfs, split payments, find teammates and sub in from the live bench across Kochi." />
-    <script>
-      // Apply the saved theme before first paint (no flash). Mirrors stores/theme.ts.
-      ;(function () {
-        try {
-          var mode = (JSON.parse(localStorage.getItem('pytch-theme') || '{}').state || {}).mode || 'dark'
-          var t = mode === 'system' ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark') : mode
-          var r = document.documentElement
-          r.dataset.theme = t
-          r.classList.toggle('dark', t === 'dark')
-          document.querySelector('meta[name="theme-color"]').setAttribute('content', t === 'light' ? '#f2f5ef' : '#05080a')
-        } catch (e) {}
-      })()
-    </script>
+    <script src="/theme-init.js"></script>
     <title>PYTCH — Play more. Chase less.</title>
   </head>
   <body>

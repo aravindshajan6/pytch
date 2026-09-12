@@ -14,6 +14,12 @@ async def my_payments(user: CurrentUser, db: DB) -> list[PaymentOut]:
     return await service.my_payments(db, user)
 
 
+@router.post("/{payment_id}/cancel", response_model=PaymentOut)
+async def cancel(payment_id: uuid.UUID, user: CurrentUser, db: DB) -> PaymentOut:
+    """Checkout closed without paying → release the intent's credits / coupon now."""
+    return await service.cancel_mine(db, user, payment_id)
+
+
 @router.post("/{payment_id}/mock/complete", response_model=PaymentOut)
 async def mock_complete(payment_id: uuid.UUID, body: MockCompleteRequest, user: CurrentUser, db: DB) -> PaymentOut:
     return await service.complete_mock(db, user, payment_id, body.outcome)

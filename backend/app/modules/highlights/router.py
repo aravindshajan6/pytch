@@ -70,5 +70,6 @@ async def unpin(clip_id: uuid.UUID, db: DB, user: CurrentUser) -> ClipOut:
 
 
 @router.post("/clips/{clip_id}/view", response_model=ViewsOut)
-async def view(clip_id: uuid.UUID, db: DB, _: CurrentUser) -> ViewsOut:
-    return ViewsOut(views=await service.add_view(db, clip_id))
+async def view(clip_id: uuid.UUID, db: DB, user: CurrentUser) -> ViewsOut:
+    """Counted once per viewer per clip per day; the owner's own plays don't count."""
+    return ViewsOut(views=await service.add_view(db, clip_id, user))

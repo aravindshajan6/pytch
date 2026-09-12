@@ -197,7 +197,8 @@ def verified_criteria(stats: PlayerStats) -> list[VerifiedCriterion]:
         ),
         VerifiedCriterion(
             key="no_shows", label="No more than 1 no-show", current=no_shows,
-            target=VERIFIED_MAX_NO_SHOWS, met=no_shows <= VERIFIED_MAX_NO_SHOWS,
+            # nothing to vouch for until someone has actually rated this player
+            target=VERIFIED_MAX_NO_SHOWS, met=n > 0 and no_shows <= VERIFIED_MAX_NO_SHOWS,
         ),
     ]
 

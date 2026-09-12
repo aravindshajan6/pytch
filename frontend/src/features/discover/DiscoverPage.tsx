@@ -8,9 +8,9 @@ import { FilterChip } from '@/components/ui/Chip'
 import { Segmented } from '@/components/ui/Segmented'
 import { EmptyState, ErrorState, PageHeader } from '@/components/ui/States'
 import { useIsDesktop } from '@/hooks/useMediaQuery'
+import { useSports } from '@/hooks/useSports'
 import type { TurfQuery } from '@/lib/api/endpoints'
 import { cn } from '@/lib/cn'
-import { SPORTS, SPORT_LIST } from '@/lib/sports'
 import { useLocationStore } from '@/stores/location'
 import type { Sport, TurfSummary } from '@/types/api'
 import { useDebouncedValue, useTurfs } from './api'
@@ -19,19 +19,47 @@ import { TurfMap } from './TurfMap'
 
 type Sort = NonNullable<TurfQuery['sort']>
 
+const SORTS: Sort[] = ['distance', 'price', 'rating']
 const round = (n: number) => Math.round(n * 1000) / 1000
 
 export default function DiscoverPage() {
-  const [params] = useSearchParams()
-  const initialSport = params.get('sport')
-  const [sport, setSport] = useState<Sport | undefined>(
-    initialSport && initialSport in SPORTS ? (initialSport as Sport) : undefined,
-  )
-  const [indoor, setIndoor] = useState(false)
-  const [camera, setCamera] = useState(false)
-  const [sort, setSort] = useState<Sort>('distance')
-  const [search, setSearch] = useState(params.get('q') ?? '')
+  // Filters live in the URL (?sport=&indoor=1&camera=1&sort=&q=) so Back from a turf restores them,
+  // and a filtered view is shareable. `replace` keeps each tweak out of the history stack.
+  const [params, setParams] = useSearchParams()
+  const sports = useSports()
+  const sportParam = params.get('sport')
+  const sport = sportParam && sports.some((s) => s.key === sportParam) ? (sportParam as Sport) : undefined
+  const indoor = params.get('indoor') === '1'
+  const camera = params.get('camera') === '1'
+  const sortParam = params.get('sort') as Sort | null
+  const sort: Sort = sortParam && SORTS.includes(sortParam) ? sortParam : 'distance'
+  const urlQ = params.get('q') ?? ''
+  const [search, setSearch] = useState(urlQ)
   const q = useDebouncedValue(search.trim(), 300)
+
+  const setFilter = useCallback(
+    (patch: Record<string, string | null>) =>
+      setParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          for (const [k, v] of Object.entries(patch)) {
+            if (v) next.set(k, v)
+            else next.delete(k)
+          }
+          return next
+        },
+        { replace: true },
+      ),
+    [setParams],
+  )
+  const setSport = (s: Sport | undefined) => setFilter({ sport: s ?? null })
+  const setSort = (s: Sort) => setFilter({ sort: s === 'distance' ? null : s })
+
+  // debounced search → URL (only once the debounce has settled, so "Clear" doesn't bounce the old term back)
+  const settled = q === search.trim()
+  useEffect(() => {
+    if (settled && q !== urlQ.trim()) setFilter({ q: q || null })
+  }, [settled, q, urlQ, setFilter])
 
   const lat = useLocationStore((s) => s.lat)
   const lng = useLocationStore((s) => s.lng)
@@ -69,10 +97,8 @@ export default function DiscoverPage() {
 
   const filtersActive = !!sport || indoor || camera || !!search
   const clearFilters = () => {
-    setSport(undefined)
-    setIndoor(false)
-    setCamera(false)
     setSearch('')
+    setFilter({ sport: null, indoor: null, camera: null, q: null })
   }
 
   return (
@@ -126,6 +152,7 @@ export default function DiscoverPage() {
           </div>
           <Segmented
             size="sm"
+            aria-label="Sort turfs"
             value={sort}
             onChange={setSort}
             options={[
@@ -139,16 +166,16 @@ export default function DiscoverPage() {
           <FilterChip active={!sport} onClick={() => setSport(undefined)}>
             All
           </FilterChip>
-          {SPORT_LIST.map((s) => (
-            <FilterChip key={s} active={sport === s} onClick={() => setSport(sport === s ? undefined : s)}>
-              <span>{SPORTS[s].emoji}</span> {SPORTS[s].label}
+          {sports.map((s) => (
+            <FilterChip key={s.key} active={sport === s.key} onClick={() => setSport(sport === s.key ? undefined : s.key)}>
+              <span>{s.emoji}</span> {s.label}
             </FilterChip>
           ))}
           <span className="mx-1 w-px shrink-0 bg-white/10" aria-hidden />
-          <FilterChip active={indoor} onClick={() => setIndoor((v) => !v)} aria-pressed={indoor}>
+          <FilterChip active={indoor} onClick={() => setFilter({ indoor: indoor ? null : '1' })} aria-pressed={indoor}>
             <Home className="h-3.5 w-3.5" /> Indoor
           </FilterChip>
-          <FilterChip active={camera} onClick={() => setCamera((v) => !v)} aria-pressed={camera}>
+          <FilterChip active={camera} onClick={() => setFilter({ camera: camera ? null : '1' })} aria-pressed={camera}>
             <Video className="h-3.5 w-3.5" /> Camera
           </FilterChip>
         </div>

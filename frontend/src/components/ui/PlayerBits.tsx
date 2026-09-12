@@ -1,6 +1,6 @@
 import { BadgeCheck } from 'lucide-react'
 import { cn } from '@/lib/cn'
-import { SPORTS, TIERS } from '@/lib/sports'
+import { TIERS, sportInfo } from '@/lib/sports'
 import type { Sport, Tier } from '@/types/api'
 import { alpha } from '@/lib/color'
 
@@ -41,7 +41,7 @@ export function TrueSkillPill({ value, className }: { value: number | null; clas
 }
 
 export function SportBadge({ sport, format, className }: { sport: Sport; format?: string; className?: string }) {
-  const s = SPORTS[sport]
+  const s = sportInfo(sport)
   return (
     <span
       className={cn('inline-flex h-6 items-center gap-1 rounded-full px-2.5 text-[11px] font-semibold', className)}

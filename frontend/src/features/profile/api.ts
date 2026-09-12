@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api/endpoints'
 import { qk } from '@/lib/api/queryKeys'
 import { useAuth } from '@/stores/auth'
+import { syncHomeLocation } from '@/stores/location'
 import type { UserUpdate, UUID } from '@/types/api'
 
 export function useMyProfile() {
@@ -28,6 +29,7 @@ export function useUpdateProfile() {
     onSuccess: (user) => {
       qc.setQueryData(qk.me, user)
       setUser(user)
+      syncHomeLocation(user)
       qc.invalidateQueries({ queryKey: qk.me })
       qc.invalidateQueries({ queryKey: qk.myProfile })
     },

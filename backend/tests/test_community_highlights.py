@@ -158,8 +158,9 @@ async def test_pin_limit_likes_views_and_feed(client, recorded_match):
     r = await client.delete(f"{API}/highlights/clips/{target}/like", headers=auth_headers(players[0]))
     assert r.json()["likes_count"] == 1
 
-    for n in (1, 2, 3):
-        assert (await client.post(f"{API}/highlights/clips/{target}/view", headers=auth_headers(host))).json() == {
+    # views: the owner's own plays don't count, and each viewer counts once a day
+    for viewer, n in ((host, 0), (players[0], 1), (players[0], 1), (players[1], 2), (players[2], 3)):
+        assert (await client.post(f"{API}/highlights/clips/{target}/view", headers=auth_headers(viewer))).json() == {
             "views": n}
 
     feed = (await client.get(f"{API}/highlights/feed", params={"sort": "trending"}, headers=auth_headers(host))).json()
